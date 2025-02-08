@@ -84,6 +84,7 @@ def add_digitizer(
     hc.authorize_repeated_volumes = True
     hc.output_filename = output_filename
     hc.attributes = [
+        "EventID",
         "PostPosition",
         "TotalEnergyDeposit",
         "PreStepUniqueVolumeID",

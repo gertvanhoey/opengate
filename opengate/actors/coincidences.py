@@ -136,32 +136,31 @@ def process_chunk(
                 for k in keys:
                     coincidences_tmp[f"{k}1"].append(singles[i][k])
                     coincidences_tmp[f"{k}2"].append(singles[j][k])
-
             else:
-                # filter coincidences in the same window
-
-                # skip if no coincidecnes in this window
-                if len(coincidences_tmp["EventID1"]) == 0:
-                    break
-                if policy in policy_functions:
-                    coincidences_filtered = policy_functions[policy](
-                        coincidences_tmp,
-                        min_transaxial_distance,
-                        transaxial_plane,
-                        max_axial_distance,
-                    )
-                else:
-                    fatal(f"Error in Coincidence Sorter: {policy} is unknown")
-                # save the filtered coincidences
-                if coincidences_filtered:
-                    for key in coincidences:
-                        for j in range(len(coincidences_filtered[key])):
-                            coincidences[key].append(coincidences_filtered[key][j])
-                # clean temp containers
-                for key in coincidences_tmp.keys():
-                    coincidences_tmp[key].clear()
-
                 break  # if the time difference exceeds the time window, break the loop
+
+        # filter coincidences in the same window
+
+        # skip if no coincidences in this window
+        if len(coincidences_tmp["EventID1"]) == 0:
+            continue
+        if policy in policy_functions:
+            coincidences_filtered = policy_functions[policy](
+                coincidences_tmp,
+                min_transaxial_distance,
+                transaxial_plane,
+                max_axial_distance,
+            )
+        else:
+            fatal(f"Error in Coincidence Sorter: {policy} is unknown")
+        # save the filtered coincidences
+        if coincidences_filtered:
+            for key in coincidences:
+                for j in range(len(coincidences_filtered[key])):
+                    coincidences[key].append(coincidences_filtered[key][j])
+        # clean temp containers
+        for key in coincidences_tmp.keys():
+            coincidences_tmp[key].clear()
 
     return coincidences
 
@@ -202,7 +201,10 @@ def filter_goods(
         # print(trans_diff, " vs. ", min_transaxial_distance, trans_diff > min_transaxial_distance)
 
         if trans_diff > min_transaxial_distance and axial_diff < max_axial_distance:
+            # print(f"({coincidences["index1"][i]}, {coincidences["index2"][i]}) tr {trans_diff} ax {axial_diff} -> keep")
             indices_to_keep.append(i)
+        # else:
+        #     print(f"({coincidences["index1"][i]}, {coincidences["index2"][i]}) tr {trans_diff} ax {axial_diff} -> drop")
 
     coincidences_filtered = {
         key: [value[i] for i in indices_to_keep] for key, value in coincidences.items()

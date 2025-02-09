@@ -6,6 +6,7 @@ import uproot
 import numpy as np
 import time
 import os.path
+from itertools import chain
 
 ns = gate.g4_units.ns
 mm = gate.g4_units.mm
@@ -32,22 +33,23 @@ def run_coincidence_detection(
             chunk_size="1000MB",
         )
     coincidences_pd = pd.DataFrame.from_dict(coincidences)
+    # print(coincidences.keys())
     time_spent = time.time() - start
     return coincidences_pd, time_spent
 
 
-def transaxial_distance_squared(coincidences):
+def transaxial_distance(coincidences):
     x1 = coincidences["PostPosition_X1"].to_numpy()
     x2 = coincidences["PostPosition_X2"].to_numpy()
     y1 = coincidences["PostPosition_Y1"].to_numpy()
     y2 = coincidences["PostPosition_Y2"].to_numpy()
-    return (x1 - x2) ** 2 + (y1 - y2) ** 2
+    return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
 
 
-def axial_distance_squared(coincidences):
+def axial_distance(coincidences):
     z1 = coincidences["PostPosition_Z1"].to_numpy()
     z2 = coincidences["PostPosition_Z2"].to_numpy()
-    return (z1 - z2) ** 2
+    return abs(z1 - z2)
 
 
 def run_coincidence_detection2(
@@ -55,7 +57,10 @@ def run_coincidence_detection2(
 ):
     start = time.time()
     with uproot.open(root_file_path) as root_file:
-        singles_pd = root_file["singles"].arrays(library="pd")
+        singles_tree = root_file["singles"]
+        singles_pd = singles_tree.arrays(library="pd")
+        print(f"There are {len(singles_pd)} singles")
+        # singles_pd.insert(0, 'index', range(len(singles_pd)))
         singles_pd["VolumeIDHash"] = pd.util.hash_pandas_object(
             singles_pd["PreStepUniqueVolumeID"], index=False
         )
@@ -85,38 +90,36 @@ def run_coincidence_detection2(
             .rename(columns=rename_dict2)
             .reset_index(drop=True)
         )
-        coinc = pd.concat([coinc1, coinc2], axis=1)
+        # coinc = pd.concat([coinc1, coinc2], axis=1)
+        interleaved_columns = list(
+            chain(*zip(coinc1.columns, coinc2.columns))
+        )  # Interleave column names
+        coinc = pd.concat([coinc1, coinc2], axis=1)[interleaved_columns]
         coinc = coinc.loc[coinc["VolumeIDHash1"] != coinc["VolumeIDHash2"]].reset_index(
             drop=True
         )
+        # >= is better
+        td = transaxial_distance(coinc)
+        # for row in range(len(coinc.index)):
+        #     print(f"({coinc["index1"][row]}, {coinc["index2"][row]}) td {td[row]}")
         coinc = coinc.loc[
-            transaxial_distance_squared(coinc) >= min_transaxial_distance**2
+            transaxial_distance(coinc) > min_transaxial_distance
         ].reset_index(drop=True)
-        coinc = coinc.loc[
-            axial_distance_squared(coinc) <= max_axial_distance**2
-        ].reset_index(drop=True)
+        # <= is better
+        coinc = coinc.loc[axial_distance(coinc) < max_axial_distance].reset_index(
+            drop=True
+        )
         time_spent = time.time() - start
         return coinc, time_spent
 
 
 def sort_singles(input_file_path, output_file_path):
     with uproot.open(input_file_path) as input_root_file:
-        print(input_root_file.keys())
-        singles_tree = input_root_file["singles"]
-        singles_pd = singles_tree.arrays(library="pd")[
-            [
-                "EventID",
-                "PreStepUniqueVolumeID",
-                "PostPosition_X",
-                "PostPosition_Y",
-                "PostPosition_Z",
-                "GlobalTime",
-                "TotalEnergyDeposit",
-            ]
-        ]
-    singles_pd.sort_values("GlobalTime", inplace=True)
+        singles_pd = input_root_file["singles"].arrays(library="pd")
+        singles_pd.sort_values("GlobalTime", inplace=True, ignore_index=True)
     with uproot.recreate(output_file_path) as output_root_file:
         output_root_file["singles"] = singles_pd
+        # output_root_file["singles"] = singles_pd.to_dict(orient="list")
 
 
 def root_file_name(prefix, activity, duration, num_threads):
@@ -154,7 +157,7 @@ def simulate(activity, duration, num_threads):
 if __name__ == "__main__":
 
     ACTIVITY = 5000 * kBq
-    DURATION = 0.0001 * sec  # 0.01 * sec
+    DURATION = 0.01 * sec  # 0.01 * sec
     NUM_THREADS = 1
 
     singles_file_name = root_file_name("siemens", ACTIVITY, DURATION, NUM_THREADS)
@@ -172,11 +175,17 @@ if __name__ == "__main__":
         min_transaxial_distance,
         max_axial_distance,
     )
-    print(coincidences)
+    print(coincidences.to_string())
+    # coincidences2, time_spent2 = run_coincidence_detection2(
+    #     singles_file_name, time_window, min_transaxial_distance, max_axial_distance
+    # )
     coincidences2, time_spent2 = run_coincidence_detection2(
-        singles_file_name, time_window, min_transaxial_distance, max_axial_distance
+        sorted_singles_file_name,
+        time_window,
+        min_transaxial_distance,
+        max_axial_distance,
     )
-    print(coincidences2)
+    print(coincidences2.to_string())
 
     print(
         f"Coincidences:  {len(coincidences.index)} duration {time_spent:.03f} seconds"
@@ -185,3 +194,20 @@ if __name__ == "__main__":
         f"Coincidences2: {len(coincidences2.index)} duration {time_spent2:.03f} seconds"
     )
     print(f"Speedup {time_spent / time_spent2:.03f}")
+
+    # tup1 = [(i1, i2) for (i1, i2) in zip(coincidences["index1"], coincidences["index2"])]
+    tup1 = list(zip(coincidences["index1"], coincidences["index2"]))
+    tup2 = list(zip(coincidences2["index1"], coincidences2["index2"]))
+
+    missing = 0
+    for t in tup2:
+        if t not in tup1:
+            missing += 1
+            print(f"{t} is missing in the current implementation")
+    print(f"{missing} coincidences missing in the current implementation")
+    missing = 0
+    for t in tup1:
+        if t not in tup2:
+            missing += 1
+            print(f"{t} is missing in the new implementation")
+    print(f"{missing} coincidences missing in the new implementation")

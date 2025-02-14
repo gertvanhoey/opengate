@@ -113,13 +113,23 @@ def run_coincidence_detection2(
         return coinc, time_spent
 
 
-def sort_singles(input_file_path, output_file_path):
+def run_coincidence_detection3(root_file_path, chunk_size):
+    with uproot.open(root_file_path) as root_file:
+        singles_tree = root_file["singles"]
+        for chunk in singles_tree.iterate(step_size=chunk_size):
+            t = chunk["GlobalTime"].to_numpy()
+            print(f"chunk min max {np.min(t):.0f} {np.max(t):.0f}")
+
+
+def copy_singles(input_file_path, output_file_path, sort=True):
     with uproot.open(input_file_path) as input_root_file:
         singles_pd = input_root_file["singles"].arrays(library="pd")
-        singles_pd.sort_values("GlobalTime", inplace=True, ignore_index=True)
+        if sort:
+            singles_pd.sort_values("GlobalTime", inplace=True, ignore_index=False)
     with uproot.recreate(output_file_path) as output_root_file:
-        output_root_file["singles"] = singles_pd
-        # output_root_file["singles"] = singles_pd.to_dict(orient="list")
+        # print(f"columns {singles_pd.columns.tolist()}")
+        output_root_file["singles"] = singles_pd  # with index
+        # output_root_file["singles"] = singles_pd.to_dict(orient="list") # without index
 
 
 def root_file_name(prefix, activity, duration, num_threads):
@@ -157,57 +167,74 @@ def simulate(activity, duration, num_threads):
 if __name__ == "__main__":
 
     ACTIVITY = 5000 * kBq
-    DURATION = 0.01 * sec  # 0.01 * sec
-    NUM_THREADS = 1
+    DURATION = 0.1 * sec  # 0.01 * sec
+    NUM_THREADS = 6
 
     singles_file_name = root_file_name("siemens", ACTIVITY, DURATION, NUM_THREADS)
     sorted_singles_file_name = f"{singles_file_name[:-5]}_sorted.root"
     if not os.path.isfile(singles_file_name):
         simulate(ACTIVITY, DURATION, NUM_THREADS)
-        sort_singles(singles_file_name, sorted_singles_file_name)
+        copy_singles(singles_file_name, sorted_singles_file_name, sort=True)
+        copy_singles(singles_file_name, singles_file_name, sort=False)
 
-    time_window = 1 * ns
-    min_transaxial_distance = 156 * mm
-    max_axial_distance = 168 * mm
-    coincidences, time_spent = run_coincidence_detection(
-        sorted_singles_file_name,
-        time_window,
-        min_transaxial_distance,
-        max_axial_distance,
-    )
-    print(coincidences.to_string())
-    # coincidences2, time_spent2 = run_coincidence_detection2(
-    #     singles_file_name, time_window, min_transaxial_distance, max_axial_distance
+    # time_window = 1 * ns
+    # min_transaxial_distance = 156 * mm
+    # max_axial_distance = 168 * mm
+    # coincidences1s, time_spent1s = run_coincidence_detection(
+    #     sorted_singles_file_name,
+    #     time_window,
+    #     min_transaxial_distance,
+    #     max_axial_distance,
     # )
-    coincidences2, time_spent2 = run_coincidence_detection2(
-        sorted_singles_file_name,
-        time_window,
-        min_transaxial_distance,
-        max_axial_distance,
-    )
-    print(coincidences2.to_string())
 
-    print(
-        f"Coincidences:  {len(coincidences.index)} duration {time_spent:.03f} seconds"
-    )
-    print(
-        f"Coincidences2: {len(coincidences2.index)} duration {time_spent2:.03f} seconds"
-    )
-    print(f"Speedup {time_spent / time_spent2:.03f}")
+    # coincidences1u, time_spent1u = run_coincidence_detection(
+    #     singles_file_name,
+    #     time_window,
+    #     min_transaxial_distance,
+    #     max_axial_distance,
+    # )
 
-    # tup1 = [(i1, i2) for (i1, i2) in zip(coincidences["index1"], coincidences["index2"])]
-    tup1 = list(zip(coincidences["index1"], coincidences["index2"]))
-    tup2 = list(zip(coincidences2["index1"], coincidences2["index2"]))
+    # print(f"columns {coincidences1s.columns.tolist()}")
+    # print(coincidences.to_string())
+    # # coincidences2, time_spent2 = run_coincidence_detection2(
+    # #     singles_file_name, time_window, min_transaxial_distance, max_axial_distance
+    # # )
 
-    missing = 0
-    for t in tup2:
-        if t not in tup1:
-            missing += 1
-            print(f"{t} is missing in the current implementation")
-    print(f"{missing} coincidences missing in the current implementation")
-    missing = 0
-    for t in tup1:
-        if t not in tup2:
-            missing += 1
-            print(f"{t} is missing in the new implementation")
-    print(f"{missing} coincidences missing in the new implementation")
+    # coincidences2, time_spent2 = run_coincidence_detection2(
+    #     sorted_singles_file_name,
+    #     time_window,
+    #     min_transaxial_distance,
+    #     max_axial_distance,
+    # )
+    # print(coincidences2.to_string())
+
+    # print(
+    #     f"Coincidences1s:  {len(coincidences1s.index)} duration {time_spent1s:.03f} seconds"
+    # )
+    # print(
+    #     f"Coincidences1u:  {len(coincidences1u.index)} duration {time_spent1u:.03f} seconds"
+    # )
+    # print(
+    #     f"Coincidences2: {len(coincidences2.index)} duration {time_spent2:.03f} seconds"
+    # )
+    # print(f"Speedup {time_spent1s / time_spent2:.03f}")
+
+    # # # tup1 = [(i1, i2) for (i1, i2) in zip(coincidences["index1"], coincidences["index2"])]
+    # tup1s = list(zip(coincidences1s["index1"], coincidences1s["index2"]))
+    # tup2 = list(zip(coincidences2["index1"], coincidences2["index2"]))
+
+    # missing = 0
+    # for t in tup2:
+    #     if t not in tup1s:
+    #         missing += 1
+    #         print(f"{t} is missing in the current implementation")
+    # print(f"{missing} coincidences missing in the current implementation (1s)")
+    # missing = 0
+    # for t in tup1s:
+    #     if t not in tup2:
+    #         missing += 1
+    #         print(f"{t} is missing in the new implementation")
+    # print(f"{missing} coincidences missing in the new implementation (2)")
+
+    chunk_size = 4000 * 6
+    run_coincidence_detection3(singles_file_name, chunk_size)

@@ -40,18 +40,32 @@ def run_coincidence_detection(
     return coincidences_pd, time_spent
 
 
-def transaxial_distance(coincidences):
-    x1 = coincidences["PostPosition_X1"].to_numpy()
-    x2 = coincidences["PostPosition_X2"].to_numpy()
-    y1 = coincidences["PostPosition_Y1"].to_numpy()
-    y2 = coincidences["PostPosition_Y2"].to_numpy()
-    return np.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2)
+def transaxial_distance(coincidences, transaxial_plane):
+    if transaxial_plane not in ("xy", "yz", "xz"):
+        raise ValueError(
+            f"Invalid transaxial_plane: '{transaxial_plane}'. Expected one of 'xy', 'yz' or 'xz'."
+        )
+    a1, a2 = [
+        coincidences[f"PostPosition_{transaxial_plane[0].upper()}{n}"].to_numpy()
+        for n in (1, 2)
+    ]
+    b1, b2 = [
+        coincidences[f"PostPosition_{transaxial_plane[1].upper()}{n}"].to_numpy()
+        for n in (1, 2)
+    ]
+    return np.sqrt((a1 - a2) ** 2 + (b1 - b2) ** 2)
 
 
-def axial_distance(coincidences):
-    z1 = coincidences["PostPosition_Z1"].to_numpy()
-    z2 = coincidences["PostPosition_Z2"].to_numpy()
-    return abs(z1 - z2)
+def axial_distance(coincidences, transaxial_plane):
+    if transaxial_plane not in ("xy", "yz", "xz"):
+        raise ValueError(
+            f"Invalid transaxial_plane: '{transaxial_plane}'. Expected one of 'xy', 'yz' or 'xz'."
+        )
+    axial_coordinate = (set("xyz") - set(transaxial_plane)).pop().upper()
+    a1, a2 = [
+        coincidences[f"PostPosition_{axial_coordinate}{n}"].to_numpy() for n in (1, 2)
+    ]
+    return np.abs(a1 - a2)
 
 
 def run_coincidence_detection_in_chunk(
@@ -96,13 +110,6 @@ def run_coincidence_detection_in_chunk(
     coinc = coinc.loc[coinc["VolumeIDHash1"] != coinc["VolumeIDHash2"]].reset_index(
         drop=True
     )
-    td = transaxial_distance(coinc)
-    # >= is better
-    coinc = coinc.loc[transaxial_distance(coinc) > min_transaxial_distance].reset_index(
-        drop=True
-    )
-    # <= is better
-    coinc = coinc.loc[axial_distance(coinc) < max_axial_distance].reset_index(drop=True)
     return coinc
 
 
@@ -157,14 +164,39 @@ def run_coincidence_detection3(
                 queue, time_window, min_transaxial_distance, max_axial_distance
             )
         )
+    all_coincidences = pd.concat(coincidences, axis=0)
+    filtered_coincidences = take_all_goods(
+        all_coincidences, min_transaxial_distance, "xy", max_axial_distance
+    )
     time_spent = time.time() - start
-    return pd.concat(coincidences, axis=0), time_spent
+    return filtered_coincidences, time_spent
+
+
+def filter_goods(
+    coincidences, min_transaxial_distance, transaxial_plane, max_axial_distance
+):
+    td = transaxial_distance(coincidences, transaxial_plane)
+    # >= is better
+    coincidences = coincidences.loc[td > min_transaxial_distance].reset_index(drop=True)
+    ad = axial_distance(coincidences, transaxial_plane)
+    # <= is better
+    coincidences = coincidences.loc[ad < max_axial_distance].reset_index(drop=True)
+    return coincidences
+
+
+def take_all_goods(
+    coincidences, min_transaxial_distance, transaxial_plane, max_axial_distance
+):
+    return filter_goods(
+        coincidences, min_transaxial_distance, transaxial_plane, max_axial_distance
+    )
 
 
 def run_coincidence_detection2(
     root_file_path, time_window, min_transaxial_distance, max_axial_distance
 ):
     start = time.time()
+
     with uproot.open(root_file_path) as root_file:
         singles_tree = root_file["singles"]
         singles_pd = singles_tree.arrays(library="pd")
@@ -206,6 +238,7 @@ def run_coincidence_detection2(
             chain(*zip(coinc1.columns, coinc2.columns))
         )  # Interleave column names
         coinc = pd.concat([coinc1, coinc2], axis=1)[interleaved_columns]
+
         coinc = coinc.loc[coinc["VolumeIDHash1"] != coinc["VolumeIDHash2"]].reset_index(
             drop=True
         )

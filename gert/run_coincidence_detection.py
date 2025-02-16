@@ -177,11 +177,39 @@ def filter_goods(
 ):
     td = transaxial_distance(coincidences, transaxial_plane)
     # >= is better
-    coincidences = coincidences.loc[td > min_transaxial_distance].reset_index(drop=True)
-    ad = axial_distance(coincidences, transaxial_plane)
+    filtered_coincidences = coincidences.loc[td > min_transaxial_distance].reset_index(
+        drop=True
+    )
+    ad = axial_distance(filtered_coincidences, transaxial_plane)
     # <= is better
-    coincidences = coincidences.loc[ad < max_axial_distance].reset_index(drop=True)
-    return coincidences
+    filtered_coincidences = filtered_coincidences.loc[
+        ad < max_axial_distance
+    ].reset_index(drop=True)
+    return filtered_coincidences
+
+
+def filter_multi(coincidences):
+    unique_values, counts = np.unique(
+        coincidences["EventID1"].to_numpy(), return_counts=True
+    )
+    single_values = unique_values[counts == 1]
+    filtered_coincidences = coincidences[coincidences["EventID1"].isin(single_values)]
+    return filtered_coincidences
+
+
+def filter_max_energy(coincidences):
+    filtered_coincidences = coincidences.copy(deep=True)
+    filtered_coincidences["TotalEnergyInCoincidence"] = (
+        filtered_coincidences["TotalEnergyDeposit1"]
+        + filtered_coincidences["TotalEnergyDeposit2"]
+    )
+    filtered_coincidences = filtered_coincidences.loc[
+        filtered_coincidences.groupby("EventID1")["TotalEnergyInCoincidence"].idxmax()
+    ]
+    filtered_coincidences = filtered_coincidences.drop(
+        columns=["TotalEnergyInCoincidence"]
+    )
+    return filtered_coincidences
 
 
 def take_all_goods(

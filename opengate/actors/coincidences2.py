@@ -77,6 +77,7 @@ def coincidences_sorter(
         process_chunk(queue, time_window, min_transaxial_distance, max_axial_distance)
     )
     all_coincidences = pd.concat(coincidences, axis=0)
+    print(f"all_coincidences {len(all_coincidences.index)}")
 
     filtered_coincidences = policy_functions[policy](
         all_coincidences,
@@ -123,7 +124,7 @@ def process_chunk(queue, time_window, min_transaxial_distance, max_axial_distanc
 def run_coincidence_detection_in_chunk(
     chunk, time_window, min_transaxial_distance, max_axial_distance
 ):
-    print(f"There are {len(chunk)} singles")
+    # print(f"There are {len(chunk)} singles")
     chunk["VolumeIDHash"] = pd.util.hash_pandas_object(
         chunk["PreStepUniqueVolumeID"], index=False
     )
@@ -205,6 +206,9 @@ def take_winner_if_is_good(
     coincidences, min_transaxial_distance, transaxial_plane, max_axial_distance
 ):
     filtered_coincidences = filter_max_energy(coincidences)
+    print(
+        f"Result after filter_max_energy: {len(filtered_coincidences.index)} coincidences"
+    )
     filtered_coincidences = filter_goods(
         filtered_coincidences,
         min_transaxial_distance,
@@ -264,7 +268,7 @@ def filter_max_energy(coincidences):
         + filtered_coincidences["TotalEnergyDeposit2"]
     )
     filtered_coincidences = filtered_coincidences.loc[
-        filtered_coincidences.groupby("EventID1")["TotalEnergyInCoincidence"].idxmax()
+        filtered_coincidences.groupby("index1")["TotalEnergyInCoincidence"].idxmax()
     ]
     filtered_coincidences = filtered_coincidences.drop(
         columns=["TotalEnergyInCoincidence"]

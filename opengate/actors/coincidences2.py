@@ -76,8 +76,7 @@ def coincidences_sorter(
     coincidences.append(
         process_chunk(queue, time_window, min_transaxial_distance, max_axial_distance)
     )
-    all_coincidences = pd.concat(coincidences, axis=0)
-    print(f"all_coincidences {len(all_coincidences.index)}")
+    all_coincidences = pd.concat(coincidences, axis=0, ignore_index=True)
 
     filtered_coincidences = policy_functions[policy](
         all_coincidences,
@@ -124,7 +123,6 @@ def process_chunk(queue, time_window, min_transaxial_distance, max_axial_distanc
 def run_coincidence_detection_in_chunk(
     chunk, time_window, min_transaxial_distance, max_axial_distance
 ):
-    # print(f"There are {len(chunk)} singles")
     chunk["VolumeIDHash"] = pd.util.hash_pandas_object(
         chunk["PreStepUniqueVolumeID"], index=False
     )
@@ -206,9 +204,6 @@ def take_winner_if_is_good(
     coincidences, min_transaxial_distance, transaxial_plane, max_axial_distance
 ):
     filtered_coincidences = filter_max_energy(coincidences)
-    print(
-        f"Result after filter_max_energy: {len(filtered_coincidences.index)} coincidences"
-    )
     filtered_coincidences = filter_goods(
         filtered_coincidences,
         min_transaxial_distance,
@@ -226,13 +221,15 @@ def take_winner_if_all_are_goods(
     )
 
     counts = coincidences["index1"].value_counts()
-    filtered_counts = filtered_coincidences["index2"].value_counts()
+    filtered_counts = filtered_coincidences["index1"].value_counts()
 
-    # Find values where df1 has more occurrences than df2
-    to_remove = counts[counts > filtered_counts].index
-
-    # Remove groups from df1 where A is in to_remove
-    filtered_coincidences = coincidences[~coincidences["index1"].isin(to_remove)]
+    common_index1_values = counts.index.intersection(filtered_counts.index)
+    index1_values_with_matching_counts = common_index1_values[
+        counts[common_index1_values] == filtered_counts[common_index1_values]
+    ]
+    filtered_coincidences = filtered_coincidences[
+        filtered_coincidences["index1"].isin(index1_values_with_matching_counts)
+    ]
 
     filtered_coincidences = filter_max_energy(filtered_coincidences)
 

@@ -73,7 +73,7 @@ def compare_coincidences(coincidences1, coincidences2):
 if __name__ == "__main__":
 
     ACTIVITY = 5000 * kBq
-    DURATION = 0.01 * sec
+    DURATION = 0.1 * sec  # 0.01 * sec
     NUM_THREADS = 6
 
     singles_file_name = root_file_name("siemens", ACTIVITY, DURATION, NUM_THREADS)
@@ -88,36 +88,38 @@ if __name__ == "__main__":
     max_axial_distance = 168 * mm
 
     policies = [
-        "removeMultiples",  # number OK, identical
-        "takeAllGoods",  # OK, identical
-        "takeWinnerOfGoods",  # OK, identical
-        "takeIfOnlyOneGood",  # OK, identical
-        "takeWinnerIfIsGood",  # NOK (but OK if only one chunk)
-        # "takeWinnerIfAllAreGoods" # Error
+        "removeMultiples",
+        "takeAllGoods",
+        "takeWinnerOfGoods",
+        "takeIfOnlyOneGood",
+        "takeWinnerIfIsGood",
+        "takeWinnerIfAllAreGoods",
     ]
 
     for policy in policies:
         print(f"Policy '{policy}'")
 
-        # Current version of coincidence detection
-        start = time.time()
-        with uproot.open(sorted_singles_file_name) as root_file:
-            singles_tree = root_file["singles"]
-            coincidences = coincidences_sorter(
-                singles_tree,
-                time_window,
-                policy=policy,
-                min_transaxial_distance=min_transaxial_distance,
-                transaxial_plane="xy",
-                max_axial_distance=max_axial_distance,
-                chunk_size="1000MB",
-            )
-        coincidences1s = pd.DataFrame.from_dict(coincidences)
-        time_spent1s = time.time() - start
+        if True:
+            # Current version of coincidence detection
+            start = time.time()
+            with uproot.open(sorted_singles_file_name) as root_file:
+                singles_tree = root_file["singles"]
+                coincidences = coincidences_sorter(
+                    singles_tree,
+                    time_window,
+                    policy=policy,
+                    min_transaxial_distance=min_transaxial_distance,
+                    transaxial_plane="xy",
+                    max_axial_distance=max_axial_distance,
+                    chunk_size="1000MB",
+                )
+            coincidences1s = pd.DataFrame.from_dict(coincidences)
+            time_spent1s = time.time() - start
 
-        print(
-            f"Current algorithm with sorted input file resulted in {len(coincidences1s.index)} coincidences ({time_spent1s:.03f} seconds)"
-        )
+            print(
+                f"Current algorithm with sorted input file resulted in {len(coincidences1s.index)} coincidences ({time_spent1s:.03f} seconds)"
+            )
+            print(coincidences1s)
 
         # New version of coincidence detection
         start = time.time()
@@ -139,6 +141,9 @@ if __name__ == "__main__":
         print(
             f"New algorithm with unsorted input file resulted in {len(coincidences2.index)} coincidences ({time_spent2:.03f} seconds)"
         )
-        print(f"Speedup {time_spent1s / time_spent2:.03f}")
+        print(coincidences2)
 
-        compare_coincidences(coincidences1s, coincidences2)
+        if True:
+            print(f"Speedup {time_spent1s / time_spent2:.03f}")
+
+            compare_coincidences(coincidences1s, coincidences2)

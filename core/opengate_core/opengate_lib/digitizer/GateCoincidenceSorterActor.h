@@ -24,6 +24,8 @@ public:
 
   void InitializeUserInfo(py::dict &user_info) override;
 
+  void StartSimulationAction() override;
+
   void EndOfEventAction(const G4Event *event) override;
 
   void EndOfRunAction(const G4Run *run) override;
@@ -55,7 +57,19 @@ protected:
   int fGroupVolumeDepth;
   double fSortingTime;
 
+  struct TemporaryStorage {
+    TemporaryStorage(GateDigiCollection *input, GateDigiCollection *output,
+                     const std::string &name_suffix);
+
+    GateDigiCollection *digis;
+    std::unique_ptr<GateDigiAttributesFiller> fillerIn;
+    std::unique_ptr<GateDigiAttributesFiller> fillerOut;
+  };
+
   GateTimeSorter fTimeSorter;
+
+  std::unique_ptr<TemporaryStorage> fCurrentStorage;
+  std::unique_ptr<TemporaryStorage> fFutureStorage;
 
   void ProcessTimeSortedSingles();
 

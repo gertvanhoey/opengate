@@ -8,11 +8,36 @@
 #include "GateCoincidenceSorterActor.h"
 #include "../GateHelpersDict.h"
 #include "GateDigiCollectionManager.h"
+#include <memory>
+
+GateCoincidenceSorterActor::TemporaryStorage::TemporaryStorage(
+    GateDigiCollection *input, GateDigiCollection *output,
+    const std::string &name_suffix) {
+
+  auto *manager = GateDigiCollectionManager::GetInstance();
+  const auto attribute_names = input->GetDigiAttributeNames();
+
+  // GateDigiCollection for temporary storage
+  // TODO name OK?
+  digis = manager->NewDigiCollection(input->GetName() + "_" + name_suffix);
+  digis->InitDigiAttributesFromCopy(input);
+
+  // Filler to copy from input collection to temporary collection
+  fillerIn =
+      std::make_unique<GateDigiAttributesFiller>(input, digis, attribute_names);
+
+  // // Filler to copy from temporary to output collection
+  // fillerOut = std::make_unique<GateDigiAttributesFiller>(digis, output,
+  //                                                        attribute_names);
+}
 
 GateCoincidenceSorterActor::GateCoincidenceSorterActor(py::dict &user_info)
     : GateVDigitizerWithOutputActor(user_info, false) {
+  fActions.insert("StartSimulationAction");
   fActions.insert("EndOfEventAction");
   fActions.insert("EndOfRunAction");
+
+  fCurrentStorage = std::make_unique<TemporaryStorage>()
 }
 
 GateCoincidenceSorterActor::~GateCoincidenceSorterActor() = default;
@@ -77,6 +102,69 @@ void GateCoincidenceSorterActor::InitializeUserInfo(py::dict &user_info) {
   }
   fGroupVolumeDepth = -1;
   fInputDigiCollectionName = DictGetStr(user_info, "input_digi_collection");
+}
+
+void GateCoincidenceSorterActor::StartSimulationAction() {
+  // Get the input hits collection
+  auto *hcm = GateDigiCollectionManager::GetInstance();
+  fInputDigiCollection = hcm->GetDigiCollection(fInputDigiCollectionName);
+
+  // Create the list of output attributes
+  fOutputDigiCollection = hcm->NewDigiCollection(fOutputDigiCollectionName);
+  std::string outputPath;
+  if (!GetWriteToDisk(fOutputNameRoot)) {
+    outputPath = "";
+  } else {
+    outputPath = GetOutputPath(fOutputNameRoot);
+  }
+  fOutputDigiCollection->SetFilenameAndInitRoot(outputPath);
+
+  const auto attribute_names = fInputDigiCollection->GetDigiAttributeNames();
+  const std::string suffix1 = "1";
+  const std::string suffix2 = "2";
+  for (const auto &name : attribute_names) {
+    if (std::find(fUserSkipDigiAttributeNames.begin(),
+                  fUserSkipDigiAttributeNames.end(),
+                  name) != fUserSkipDigiAttributeNames.end()) {
+      continue;
+    }
+    const auto att_type =
+        fInputDigiCollection->GetDigiAttribute(name)->GetDigiAttributeType();
+    GateVDigiAttribute *att1{};
+    GateVDigiAttribute *att2{};
+    if (att_type == 'D') {
+      att1 = new GateTDigiAttribute<double>(name + suffix1);
+      att2 = new GateTDigiAttribute<double>(name + suffix2);
+    } else if (att_type == 'I') {
+      att1 = new GateTDigiAttribute<int>(name + suffix1);
+      att2 = new GateTDigiAttribute<int>(name + suffix2);
+    } else if (att_type == 'L') {
+      att1 = new GateTDigiAttribute<int64_t>(name + suffix1);
+      att2 = new GateTDigiAttribute<int64_t>(name + suffix2);
+    } else if (att_type == 'S') {
+      att1 = new GateTDigiAttribute<std::string>(name + suffix1);
+      att2 = new GateTDigiAttribute<std::string>(name + suffix2);
+    } else if (att_type == '3') {
+      att1 = new GateTDigiAttribute<G4ThreeVector>(name + suffix1);
+      att2 = new GateTDigiAttribute<G4ThreeVector>(name + suffix2);
+    } else if (att_type == 'U') {
+      att1 =
+          new GateTDigiAttribute<GateUniqueVolumeID::Pointer>(name + suffix1);
+      att2 =
+          new GateTDigiAttribute<GateUniqueVolumeID::Pointer>(name + suffix2);
+    } else {
+      Fatal("Unknown digi attribute type '" + std::string(1, att_type) + "'");
+    }
+    fOutputDigiCollection->InitDigiAttribute(att1);
+    fOutputDigiCollection->InitDigiAttribute(att2);
+  }
+
+  // TODO create a kind of filler to copy two single digis into one coincidence
+  // digi
+
+  if (fInitializeRootTupleForMasterFlag) {
+    fOutputDigiCollection->RootInitializeTupleForMaster();
+  }
 }
 
 void GateCoincidenceSorterActor::SetGroupVolumeDepth(const int depth) {

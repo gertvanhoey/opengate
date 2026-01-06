@@ -26,9 +26,9 @@ GateCoincidenceSorterActor::TemporaryStorage::TemporaryStorage(
   fillerIn =
       std::make_unique<GateDigiAttributesFiller>(input, digis, attribute_names);
 
-  // // Filler to copy from temporary to output collection
-  // fillerOut = std::make_unique<GateDigiAttributesFiller>(digis, output,
-  //                                                        attribute_names);
+  // Filler to copy from temporary to output collection
+  fillerOut = std::make_unique<GateCoincidenceDigiAttributesFiller>(
+      digis, output, attribute_names);
 }
 
 GateCoincidenceSorterActor::GateCoincidenceSorterActor(py::dict &user_info)
@@ -36,8 +36,6 @@ GateCoincidenceSorterActor::GateCoincidenceSorterActor(py::dict &user_info)
   fActions.insert("StartSimulationAction");
   fActions.insert("EndOfEventAction");
   fActions.insert("EndOfRunAction");
-
-  fCurrentStorage = std::make_unique<TemporaryStorage>()
 }
 
 GateCoincidenceSorterActor::~GateCoincidenceSorterActor() = default;
@@ -186,6 +184,11 @@ void GateCoincidenceSorterActor::DigitInitialize(
                                               &l.volID);
   fTimeSorter.SetSortingWindow(fSortingTime);
   fTimeSorter.SetMaxSize(fClearEveryNEvents);
+
+  fCurrentStorage = std::make_unique<TemporaryStorage>(
+      fTimeSorter.OutputCollection(), fOutputDigiCollection, "A");
+  fFutureStorage = std::make_unique<TemporaryStorage>(
+      fTimeSorter.OutputCollection(), fOutputDigiCollection, "B");
 }
 
 void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {

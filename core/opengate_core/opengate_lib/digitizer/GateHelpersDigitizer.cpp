@@ -32,3 +32,23 @@ void GateDigiAttributesFiller::Fill(const size_t index) const {
     fOutputDigiAttributes[i]->Fill(fInputDigiAttributes[i], index);
   }
 }
+
+GateCoincidenceDigiAttributesFiller::GateCoincidenceDigiAttributesFiller(
+    GateDigiCollection *input, GateDigiCollection *output,
+    const std::set<std::string> &names) {
+  for (const auto &att_name : names) {
+    auto inputAttribute = input->GetDigiAttribute(att_name);
+    fInputDigiAttributes.push_back(inputAttribute);
+    fOutputDigiAttributes.push_back(output->GetDigiAttribute(att_name + "1"));
+    fInputDigiAttributes.push_back(inputAttribute);
+    fOutputDigiAttributes.push_back(output->GetDigiAttribute(att_name + "2"));
+  }
+}
+
+void GateCoincidenceDigiAttributesFiller::Fill(size_t index1,
+                                               size_t index2) const {
+  for (size_t i = 0; i < fInputDigiAttributes.size(); i++) {
+    fOutputDigiAttributes[i]->Fill(fInputDigiAttributes[i], index1);
+    fOutputDigiAttributes[i]->Fill(fInputDigiAttributes[i], index2);
+  }
+}

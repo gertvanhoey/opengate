@@ -63,7 +63,7 @@ protected:
 
     GateDigiCollection *digis;
     std::unique_ptr<GateDigiAttributesFiller> fillerIn;
-    std::unique_ptr<GateDigiAttributesFiller> fillerOut;
+    std::unique_ptr<GateCoincidenceDigiAttributesFiller> fillerOut;
   };
 
   GateTimeSorter fTimeSorter;

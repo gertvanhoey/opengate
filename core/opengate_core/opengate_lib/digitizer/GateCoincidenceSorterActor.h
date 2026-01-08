@@ -62,8 +62,15 @@ protected:
                      const std::string &name_suffix);
 
     GateDigiCollection *digis;
+    GateDigiCollectionIterator iter;
+    double *currentTime;
+    GateUniqueVolumeID::Pointer *currentVolID;
+    G4ThreeVector *currentPos;
+
     std::unique_ptr<GateDigiAttributesFiller> fillerIn;
     std::unique_ptr<GateCoincidenceDigiAttributesFiller> fillerOut;
+    std::optional<double> earliestTime;
+    std::optional<double> latestTime;
   };
 
   GateTimeSorter fTimeSorter;
@@ -72,6 +79,7 @@ protected:
   std::unique_ptr<TemporaryStorage> fFutureStorage;
 
   void ProcessTimeSortedSingles();
+  void DetectCoincidences();
 
   struct threadLocalT {
     GateUniqueVolumeID::Pointer *volID;

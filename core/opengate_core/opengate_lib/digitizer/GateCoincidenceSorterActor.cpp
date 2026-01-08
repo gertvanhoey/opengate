@@ -22,6 +22,11 @@ GateCoincidenceSorterActor::TemporaryStorage::TemporaryStorage(
   digis = manager->NewDigiCollection(input->GetName() + "_" + name_suffix);
   digis->InitDigiAttributesFromCopy(input);
 
+  iter = digis->NewIterator();
+  iter.TrackAttribute("GlobalTime", &currentTime);
+  iter.TrackAttribute("PreStepUniqueVolumeID", &currentVolID);
+  iter.TrackAttribute("PostPosition", &currentPos);
+
   // Filler to copy from input collection to temporary collection
   fillerIn =
       std::make_unique<GateDigiAttributesFiller>(input, digis, attribute_names);
@@ -212,10 +217,43 @@ void GateCoincidenceSorterActor::ProcessTimeSortedSingles() {
   auto &iter = fTimeSorter.OutputIterator();
   iter.GoToBegin();
   while (!iter.IsAtEnd()) {
-
-    // TODO implement
-
+    fCurrentStorage->fillerIn->Fill(iter.fIndex);
+    if (!fCurrentStorage->earliestTime) {
+      fCurrentStorage->earliestTime = *l.time;
+    }
+    fCurrentStorage->latestTime = *l.time;
     iter++;
   }
   fTimeSorter.MarkOutputAsProcessed();
+}
+
+void GateCoincidenceSorterActor::DetectCoincidences() {
+  if (fCurrentStorage->earliestTime && fCurrentStorage->latestTime) {
+    auto &iter = fCurrentStorage->iter;
+    auto &t = fCurrentStorage->currentTime;
+    auto &v = fCurrentStorage->currentVolID;
+    auto &p = fCurrentStorage->currentPos;
+    while (*fCurrentStorage->latestTime - *fCurrentStorage->earliestTime >=
+           fWindowSize + fWindowOffset) {
+      iter.GoToBegin();
+      const auto t0 = *t;
+      const auto v0 = v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth);
+      const auto p0 = *p;
+      std::vector<size_t> secondSingleIndex;
+      std::vector<uint8_t> goodCoincidence;
+      iter++;
+      while (!iter.IsAtEnd()) {
+        const auto deltaT = *t - t0;
+        if (fWindowOffset <= deltaT && deltaT <= fWindowOffset + fWindowSize) {
+          if (v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth) != v0) {
+            secondSingleIndex.push_back(iter.fIndex);
+            // TODO check axial and transaxial distance
+            const bool good = true;
+            goodCoincidence.push_back(good);
+            // Continue here!
+          }
+        }
+      }
+    }
+  }
 }

@@ -11,6 +11,7 @@
 #include "GateTimeSorter.h"
 #include "GateVDigitizerWithOutputActor.h"
 #include <G4Cache.hh>
+#include <G4ThreeVector.hh>
 #include <pybind11/stl.h>
 
 namespace py = pybind11;
@@ -51,7 +52,7 @@ protected:
   double fWindowOffset;
   MultiplesPolicy fMultiplesPolicy;
   bool fMultiWindow;
-  std::optional<double> fMinTransaxialDistance{};
+  std::optional<double> fMinTransaxialDistance2{};
   std::optional<double> fMaxAxialDistance{};
   TransaxialPlane fTransaxialPlane{TransaxialPlane::XY};
   int fGroupVolumeDepth;
@@ -66,6 +67,7 @@ protected:
     double *currentTime;
     GateUniqueVolumeID::Pointer *currentVolID;
     G4ThreeVector *currentPos;
+    double *currentEdep;
 
     std::unique_ptr<GateDigiAttributesFiller> fillerIn;
     std::unique_ptr<GateCoincidenceDigiAttributesFiller> fillerOut;
@@ -80,6 +82,8 @@ protected:
 
   void ProcessTimeSortedSingles();
   void DetectCoincidences();
+  bool CoincidenceIsGood(const G4ThreeVector &pos1,
+                         const G4ThreeVector &pos2) const;
 
   struct threadLocalT {
     GateUniqueVolumeID::Pointer *volID;

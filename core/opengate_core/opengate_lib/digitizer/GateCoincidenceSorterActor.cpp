@@ -8,7 +8,10 @@
 #include "GateCoincidenceSorterActor.h"
 #include "../GateHelpersDict.h"
 #include "GateDigiCollectionManager.h"
+#include <algorithm>
+#include <limits>
 #include <memory>
+#include <numeric>
 
 GateCoincidenceSorterActor::TemporaryStorage::TemporaryStorage(
     GateDigiCollection *input, GateDigiCollection *output,
@@ -26,6 +29,7 @@ GateCoincidenceSorterActor::TemporaryStorage::TemporaryStorage(
   iter.TrackAttribute("GlobalTime", &currentTime);
   iter.TrackAttribute("PreStepUniqueVolumeID", &currentVolID);
   iter.TrackAttribute("PostPosition", &currentPos);
+  iter.TrackAttribute("TotalEnergyDeposit", &currentEdep);
 
   // Filler to copy from input collection to temporary collection
   fillerIn =
@@ -78,8 +82,8 @@ void GateCoincidenceSorterActor::InitializeUserInfo(py::dict &user_info) {
   if (py::len(user_info) > 0 && user_info.contains("min_transaxial_distance")) {
     const auto value = user_info.attr("min_transaxial_distance");
     if (!value.is_none()) {
-      fMinTransaxialDistance =
-          DictGetDouble(user_info, "min_transaxial_distance");
+      const auto d = DictGetDouble(user_info, "min_transaxial_distance");
+      fMinTransaxialDistance2 = d * d;
     }
   }
   if (py::len(user_info) > 0 && user_info.contains("max_axial_distance")) {
@@ -227,12 +231,43 @@ void GateCoincidenceSorterActor::ProcessTimeSortedSingles() {
   fTimeSorter.MarkOutputAsProcessed();
 }
 
+bool GateCoincidenceSorterActor::CoincidenceIsGood(
+    const G4ThreeVector &pos1, const G4ThreeVector &pos2) const {
+  if (!fMaxAxialDistance && !fMinTransaxialDistance2) {
+    return true;
+  }
+  bool good = true;
+  const auto dx = pos1.x() - pos2.x();
+  const auto dy = pos1.y() - pos2.y();
+  const auto dz = pos1.z() - pos2.z();
+  if (fMaxAxialDistance) {
+    if (TransaxialPlane::XY == fTransaxialPlane) {
+      good = std::abs(dz) <= *fMaxAxialDistance;
+    } else if (TransaxialPlane::XZ == fTransaxialPlane) {
+      good = std::abs(dy) <= *fMaxAxialDistance;
+    } else if (TransaxialPlane::YZ == fTransaxialPlane) {
+      good = std::abs(dx) <= *fMaxAxialDistance;
+    }
+  }
+  if (good && fMinTransaxialDistance2) {
+    if (TransaxialPlane::XY == fTransaxialPlane) {
+      good = dx * dx + dy * dy >= *fMinTransaxialDistance2;
+    } else if (TransaxialPlane::XZ == fTransaxialPlane) {
+      good = dy * dy + dy * dy >= *fMinTransaxialDistance2;
+    } else if (TransaxialPlane::YZ == fTransaxialPlane) {
+      good = dy * dy + dz * dz >= *fMinTransaxialDistance2;
+    }
+  }
+  return good;
+}
+
 void GateCoincidenceSorterActor::DetectCoincidences() {
   if (fCurrentStorage->earliestTime && fCurrentStorage->latestTime) {
     auto &iter = fCurrentStorage->iter;
     auto &t = fCurrentStorage->currentTime;
     auto &v = fCurrentStorage->currentVolID;
     auto &p = fCurrentStorage->currentPos;
+    auto &e = fCurrentStorage->currentEdep;
     while (*fCurrentStorage->latestTime - *fCurrentStorage->earliestTime >=
            fWindowSize + fWindowOffset) {
       iter.GoToBegin();
@@ -240,6 +275,7 @@ void GateCoincidenceSorterActor::DetectCoincidences() {
       const auto v0 = v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth);
       const auto p0 = *p;
       std::vector<size_t> secondSingleIndex;
+      std::vector<double> secondSingleEdep;
       std::vector<uint8_t> goodCoincidence;
       iter++;
       while (!iter.IsAtEnd()) {
@@ -247,13 +283,63 @@ void GateCoincidenceSorterActor::DetectCoincidences() {
         if (fWindowOffset <= deltaT && deltaT <= fWindowOffset + fWindowSize) {
           if (v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth) != v0) {
             secondSingleIndex.push_back(iter.fIndex);
-            // TODO check axial and transaxial distance
-            const bool good = true;
-            goodCoincidence.push_back(good);
-            // Continue here!
+            secondSingleEdep.push_back(*e);
+            goodCoincidence.push_back(CoincidenceIsGood(p0, *p) ? 1 : 0);
           }
         }
       }
+      const auto numCoincidences = secondSingleIndex.size();
+      if (numCoincidences == 1) {
+        fCurrentStorage->fillerOut->Fill(0, secondSingleIndex[0]);
+      } else if (numCoincidences > 1) {
+        // Multiple coincidences: apply policy.
+        const auto &gc = goodCoincidence;
+        const auto &sse = secondSingleEdep;
+        const auto &ssi = secondSingleIndex;
+        if (MultiplesPolicy::TakeAllGoods == fMultiplesPolicy) {
+          for (size_t i = 0; i < numCoincidences; ++i) {
+            if (gc[i]) {
+              fCurrentStorage->fillerOut->Fill(0, ssi[i]);
+            }
+          }
+        } else if (MultiplesPolicy::TakeIfOnlyOneGood == fMultiplesPolicy) {
+          const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
+          if (numGoods == 1) {
+            const auto it = std::find(gc.begin(), gc.end(), 1);
+            size_t index = std::distance(gc.begin(), it);
+            fCurrentStorage->fillerOut->Fill(0, index);
+          }
+        } else if (MultiplesPolicy::TakeWinnerOfGoods == fMultiplesPolicy) {
+          const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
+          if (numGoods >= 1) {
+            double maxEdep = std::numeric_limits<double>::min();
+            size_t index = 0;
+            for (size_t i = 0; i < numCoincidences; ++i) {
+              if (gc[i] && sse[i] > maxEdep) {
+                maxEdep = sse[i];
+                index = i;
+              }
+            }
+            fCurrentStorage->fillerOut->Fill(0, index);
+          }
+        } else if (MultiplesPolicy::TakeWinnerIfIsGood == fMultiplesPolicy) {
+          const auto maxIt = std::max_element(sse.begin(), sse.end());
+          const size_t winnerIndex = std::distance(sse.begin(), maxIt);
+          if (gc[winnerIndex]) {
+            fCurrentStorage->fillerOut->Fill(0, ssi[winnerIndex]);
+          }
+        } else if (MultiplesPolicy::TakeWinnerIfAllAreGoods ==
+                   fMultiplesPolicy) {
+          const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
+          if (numGoods == numCoincidences) {
+            const auto maxIt = std::max_element(sse.begin(), sse.end());
+            const size_t winnerIndex = std::distance(sse.begin(), maxIt);
+            fCurrentStorage->fillerOut->Fill(0, ssi[winnerIndex]);
+          }
+        }
+        // MultiplesPolicy::RemoveMultiples: do nothing.
+      }
+      // Continue here, update begin of collection !!!
     }
   }
 }

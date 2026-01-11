@@ -51,6 +51,8 @@ GateCoincidenceSorterActor::~GateCoincidenceSorterActor() = default;
 
 void GateCoincidenceSorterActor::InitializeUserInfo(py::dict &user_info) {
 
+  std::cout << "GateCoincidenceSorterActor::InitializeUserInfo begin\n";
+
   GateVDigitizerWithOutputActor::InitializeUserInfo(user_info);
   if (py::len(user_info) > 0 && user_info.contains("window")) {
     fWindowSize = DictGetDouble(user_info, "window"); // nanoseconds
@@ -109,9 +111,13 @@ void GateCoincidenceSorterActor::InitializeUserInfo(py::dict &user_info) {
   }
   fGroupVolumeDepth = -1;
   fInputDigiCollectionName = DictGetStr(user_info, "input_digi_collection");
+
+  std::cout << "GateCoincidenceSorterActor::InitializeUserInfo end\n";
 }
 
 void GateCoincidenceSorterActor::StartSimulationAction() {
+  std::cout << "GateCoincidenceSorterActor::StartSimulationAction begin\n";
+
   // Get the input hits collection
   auto *hcm = GateDigiCollectionManager::GetInstance();
   fInputDigiCollection = hcm->GetDigiCollection(fInputDigiCollectionName);
@@ -172,16 +178,25 @@ void GateCoincidenceSorterActor::StartSimulationAction() {
   if (fInitializeRootTupleForMasterFlag) {
     fOutputDigiCollection->RootInitializeTupleForMaster();
   }
+
+  std::cout << "GateCoincidenceSorterActor::StartSimulationAction end\n";
 }
 
 void GateCoincidenceSorterActor::SetGroupVolumeDepth(const int depth) {
+  std::cout << "GateCoincidenceSorterActor::SetGroupVolumeDepth begin\n";
   fGroupVolumeDepth = depth;
+  std::cout << "GateCoincidenceSorterActor::SetGroupVolumeDepth end\n";
 }
 
 void GateCoincidenceSorterActor::DigitInitialize(
     const std::vector<std::string> &attributes_not_in_filler) {
 
-  GateVDigitizerWithOutputActor::DigitInitialize({});
+  std::cout << "GateCoincidenceSorterActor::DigitInitialize begin\n";
+
+  // GateVDigitizerWithOutputActor::DigitInitialize({});
+
+  // std::cout << "GateCoincidenceSorterActor::DigitInitialize "
+  //              "GateVDigitizerWithOutputActor::DigitInitialize done\n";
 
   // Set up pointers to track specific attributes
   auto &lr = fThreadLocalVDigitizerData.Get();
@@ -194,27 +209,42 @@ void GateCoincidenceSorterActor::DigitInitialize(
   fTimeSorter.SetSortingWindow(fSortingTime);
   fTimeSorter.SetMaxSize(fClearEveryNEvents);
 
+  std::cout
+      << "GateCoincidenceSorterActor::DigitInitialize TimeSorter set up\n";
+
   fCurrentStorage = std::make_unique<TemporaryStorage>(
       fTimeSorter.OutputCollection(), fOutputDigiCollection, "A");
   fFutureStorage = std::make_unique<TemporaryStorage>(
       fTimeSorter.OutputCollection(), fOutputDigiCollection, "B");
+
+  std::cout << "GateCoincidenceSorterActor::DigitInitialize end\n";
 }
 
 void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
+  std::cout << "GateCoincidenceSorterActor::EndOfEventAction begin\n";
+
   auto &l = fThreadLocalData.Get();
   fTimeSorter.Process();
   ProcessTimeSortedSingles();
   DetectCoincidences();
+
+  std::cout << "GateCoincidenceSorterActor::EndOfEventAction end\n";
 }
 
 void GateCoincidenceSorterActor::EndOfRunAction(const G4Run *) {
+  std::cout << "GateCoincidenceSorterActor::EndOfRunAction begin\n";
+
   fTimeSorter.Flush();
   ProcessTimeSortedSingles();
   DetectCoincidences(true);
   fOutputDigiCollection->FillToRootIfNeeded(true);
+
+  std::cout << "GateCoincidenceSorterActor::EndOfRunAction end\n";
 }
 
 void GateCoincidenceSorterActor::ProcessTimeSortedSingles() {
+  std::cout << "GateCoincidenceSorterActor::ProcessTimeSortedSingles begin\n";
+
   auto &l = fThreadLocalData.Get();
   auto &iter = fTimeSorter.OutputIterator();
   iter.GoToBegin();
@@ -227,10 +257,16 @@ void GateCoincidenceSorterActor::ProcessTimeSortedSingles() {
     iter++;
   }
   fTimeSorter.MarkOutputAsProcessed();
+
+  std::cout << "GateCoincidenceSorterActor::ProcessTimeSortedSingles end\n";
 }
 
 void GateCoincidenceSorterActor::DetectCoincidences(bool lastCall) {
+  std::cout << "GateCoincidenceSorterActor::DetectCoincidences begin\n";
+
   if (fCurrentStorage->earliestTime && fCurrentStorage->latestTime) {
+    std::cout << "earliestTime " << *fCurrentStorage->earliestTime << "\n";
+    std::cout << "latestTime " << *fCurrentStorage->latestTime << "\n";
     auto &iter = fCurrentStorage->iter;
     auto &t = fCurrentStorage->currentTime;
     auto &v = fCurrentStorage->currentVolID;
@@ -248,6 +284,8 @@ void GateCoincidenceSorterActor::DetectCoincidences(bool lastCall) {
       const auto t0 = *t;
       const auto v0 = v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth);
       const auto p0 = *p;
+      std::cout << "i0 " << i0 << " t0 " << t0 << " v0 " << v0 << " p0 " << p0
+                << "\n";
       std::vector<size_t> secondSingleIndex;
       std::vector<double> secondSingleEdep;
       std::vector<uint8_t> goodCoincidence;
@@ -289,6 +327,8 @@ void GateCoincidenceSorterActor::DetectCoincidences(bool lastCall) {
       // grown too large.
     }
   }
+
+  std::cout << "GateCoincidenceSorterActor::DetectCoincidences end\n";
 }
 
 bool GateCoincidenceSorterActor::CoincidenceIsGood(

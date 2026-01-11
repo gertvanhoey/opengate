@@ -92,6 +92,10 @@ void GateVDigitizerWithOutputActor::DigitInitialize(
   // Get thread local variables
   auto &l = fThreadLocalVDigitizerData.Get();
 
+  for (const auto &name : names) {
+    std::cout << name << "\n";
+  }
+
   // Create Filler of all remaining attributes (except the required ones)
   l.fDigiAttributeFiller = new GateDigiAttributesFiller(
       fInputDigiCollection, fOutputDigiCollection, names);

@@ -204,15 +204,13 @@ void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
   auto &l = fThreadLocalData.Get();
   fTimeSorter.Process();
   ProcessTimeSortedSingles();
+  DetectCoincidences();
 }
 
 void GateCoincidenceSorterActor::EndOfRunAction(const G4Run *) {
   fTimeSorter.Flush();
   ProcessTimeSortedSingles();
-
-  // TODO finish implementation
-
-  // Make sure everything is output into the root file.
+  DetectCoincidences(true);
   fOutputDigiCollection->FillToRootIfNeeded(true);
 }
 
@@ -229,6 +227,68 @@ void GateCoincidenceSorterActor::ProcessTimeSortedSingles() {
     iter++;
   }
   fTimeSorter.MarkOutputAsProcessed();
+}
+
+void GateCoincidenceSorterActor::DetectCoincidences(bool lastCall) {
+  if (fCurrentStorage->earliestTime && fCurrentStorage->latestTime) {
+    auto &iter = fCurrentStorage->iter;
+    auto &t = fCurrentStorage->currentTime;
+    auto &v = fCurrentStorage->currentVolID;
+    auto &p = fCurrentStorage->currentPos;
+    auto &e = fCurrentStorage->currentEdep;
+
+    iter.GoToBegin();
+    while ((*fCurrentStorage->latestTime - *fCurrentStorage->earliestTime >=
+            fWindowSize + fWindowOffset) ||
+           (lastCall &&
+            *fCurrentStorage->latestTime - *fCurrentStorage->earliestTime >=
+                fWindowOffset)) {
+
+      const auto i0 = iter.fIndex;
+      const auto t0 = *t;
+      const auto v0 = v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth);
+      const auto p0 = *p;
+      std::vector<size_t> secondSingleIndex;
+      std::vector<double> secondSingleEdep;
+      std::vector<uint8_t> goodCoincidence;
+      iter++;
+      while (!iter.IsAtEnd()) {
+        const auto deltaT = *t - t0;
+        if (fWindowOffset <= deltaT && deltaT <= fWindowOffset + fWindowSize) {
+          if (v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth) != v0) {
+            secondSingleIndex.push_back(iter.fIndex);
+            secondSingleEdep.push_back(*e);
+            goodCoincidence.push_back(CoincidenceIsGood(p0, *p) ? 1 : 0);
+          }
+        }
+        if (deltaT > fWindowOffset + fWindowSize) {
+          break;
+        }
+      }
+      const auto numCoincidences = secondSingleIndex.size();
+      if (numCoincidences == 1) {
+        fCurrentStorage->fillerOut->Fill(i0, secondSingleIndex[0]);
+      } else if (numCoincidences > 1) {
+        const auto filteredIndices =
+            ApplyPolicy(secondSingleIndex, secondSingleEdep, goodCoincidence);
+        for (auto index : filteredIndices) {
+          fCurrentStorage->fillerOut->Fill(i0, index);
+        }
+      }
+      iter.GoToBegin();
+      if (fMultiWindow) {
+        fCurrentStorage->digis->SetBeginOfEventIndex(iter.fIndex + 1);
+      } else {
+        fCurrentStorage->digis->SetBeginOfEventIndex(iter.fIndex + 1 +
+                                                     numCoincidences);
+      }
+      iter.GoToBegin();
+      fCurrentStorage->earliestTime = *t;
+
+      // TODO: swap fCurrentStorage and fFutureStorage when fCurrentStorage has
+      // grown too large.
+    }
+  }
 }
 
 bool GateCoincidenceSorterActor::CoincidenceIsGood(
@@ -261,85 +321,58 @@ bool GateCoincidenceSorterActor::CoincidenceIsGood(
   return good;
 }
 
-void GateCoincidenceSorterActor::DetectCoincidences() {
-  if (fCurrentStorage->earliestTime && fCurrentStorage->latestTime) {
-    auto &iter = fCurrentStorage->iter;
-    auto &t = fCurrentStorage->currentTime;
-    auto &v = fCurrentStorage->currentVolID;
-    auto &p = fCurrentStorage->currentPos;
-    auto &e = fCurrentStorage->currentEdep;
-    while (*fCurrentStorage->latestTime - *fCurrentStorage->earliestTime >=
-           fWindowSize + fWindowOffset) {
-      iter.GoToBegin();
-      const auto t0 = *t;
-      const auto v0 = v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth);
-      const auto p0 = *p;
-      std::vector<size_t> secondSingleIndex;
-      std::vector<double> secondSingleEdep;
-      std::vector<uint8_t> goodCoincidence;
-      iter++;
-      while (!iter.IsAtEnd()) {
-        const auto deltaT = *t - t0;
-        if (fWindowOffset <= deltaT && deltaT <= fWindowOffset + fWindowSize) {
-          if (v->get()->GetIdUpToDepthAsHash(fGroupVolumeDepth) != v0) {
-            secondSingleIndex.push_back(iter.fIndex);
-            secondSingleEdep.push_back(*e);
-            goodCoincidence.push_back(CoincidenceIsGood(p0, *p) ? 1 : 0);
-          }
+std::vector<size_t> GateCoincidenceSorterActor::ApplyPolicy(
+    const std::vector<size_t> &secondSingleIndex,
+    const std::vector<double> &secondSingleEdep,
+    const std::vector<uint8_t> &goodCoincidence) const {
+
+  const auto numCoincidences = secondSingleIndex.size();
+  std::vector<size_t> filteredIndices;
+  const auto &gc = goodCoincidence;
+  const auto &sse = secondSingleEdep;
+  const auto &ssi = secondSingleIndex;
+
+  if (MultiplesPolicy::TakeAllGoods == fMultiplesPolicy) {
+    for (size_t i = 0; i < numCoincidences; ++i) {
+      if (gc[i]) {
+        filteredIndices.push_back(ssi[i]);
+      }
+    }
+  } else if (MultiplesPolicy::TakeIfOnlyOneGood == fMultiplesPolicy) {
+    const auto numGoods = std::accumulate(gc.begin(), gc.end(), size_t(0));
+    if (numGoods == 1) {
+      const auto it = std::find(gc.begin(), gc.end(), 1);
+      const auto index = std::distance(gc.begin(), it);
+      filteredIndices.push_back(index);
+    }
+  } else if (MultiplesPolicy::TakeWinnerOfGoods == fMultiplesPolicy) {
+    const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
+    if (numGoods >= 1) {
+      double maxEdep = std::numeric_limits<double>::min();
+      size_t index = 0;
+      for (size_t i = 0; i < numCoincidences; ++i) {
+        if (gc[i] && sse[i] > maxEdep) {
+          maxEdep = sse[i];
+          index = i;
         }
       }
-      const auto numCoincidences = secondSingleIndex.size();
-      if (numCoincidences == 1) {
-        fCurrentStorage->fillerOut->Fill(0, secondSingleIndex[0]);
-      } else if (numCoincidences > 1) {
-        // Multiple coincidences: apply policy.
-        const auto &gc = goodCoincidence;
-        const auto &sse = secondSingleEdep;
-        const auto &ssi = secondSingleIndex;
-        if (MultiplesPolicy::TakeAllGoods == fMultiplesPolicy) {
-          for (size_t i = 0; i < numCoincidences; ++i) {
-            if (gc[i]) {
-              fCurrentStorage->fillerOut->Fill(0, ssi[i]);
-            }
-          }
-        } else if (MultiplesPolicy::TakeIfOnlyOneGood == fMultiplesPolicy) {
-          const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
-          if (numGoods == 1) {
-            const auto it = std::find(gc.begin(), gc.end(), 1);
-            size_t index = std::distance(gc.begin(), it);
-            fCurrentStorage->fillerOut->Fill(0, index);
-          }
-        } else if (MultiplesPolicy::TakeWinnerOfGoods == fMultiplesPolicy) {
-          const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
-          if (numGoods >= 1) {
-            double maxEdep = std::numeric_limits<double>::min();
-            size_t index = 0;
-            for (size_t i = 0; i < numCoincidences; ++i) {
-              if (gc[i] && sse[i] > maxEdep) {
-                maxEdep = sse[i];
-                index = i;
-              }
-            }
-            fCurrentStorage->fillerOut->Fill(0, index);
-          }
-        } else if (MultiplesPolicy::TakeWinnerIfIsGood == fMultiplesPolicy) {
-          const auto maxIt = std::max_element(sse.begin(), sse.end());
-          const size_t winnerIndex = std::distance(sse.begin(), maxIt);
-          if (gc[winnerIndex]) {
-            fCurrentStorage->fillerOut->Fill(0, ssi[winnerIndex]);
-          }
-        } else if (MultiplesPolicy::TakeWinnerIfAllAreGoods ==
-                   fMultiplesPolicy) {
-          const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
-          if (numGoods == numCoincidences) {
-            const auto maxIt = std::max_element(sse.begin(), sse.end());
-            const size_t winnerIndex = std::distance(sse.begin(), maxIt);
-            fCurrentStorage->fillerOut->Fill(0, ssi[winnerIndex]);
-          }
-        }
-        // MultiplesPolicy::RemoveMultiples: do nothing.
-      }
-      // Continue here, update begin of collection !!!
+      filteredIndices.push_back(index);
+    }
+  } else if (MultiplesPolicy::TakeWinnerIfIsGood == fMultiplesPolicy) {
+    const auto maxIt = std::max_element(sse.begin(), sse.end());
+    const size_t winnerIndex = std::distance(sse.begin(), maxIt);
+    if (gc[winnerIndex]) {
+      filteredIndices.push_back(winnerIndex);
+    }
+  } else if (MultiplesPolicy::TakeWinnerIfAllAreGoods == fMultiplesPolicy) {
+    const auto numGoods = std::accumulate(gc.begin(), gc.end(), 0);
+    if (numGoods == numCoincidences) {
+      const auto maxIt = std::max_element(sse.begin(), sse.end());
+      const size_t winnerIndex = std::distance(sse.begin(), maxIt);
+      filteredIndices.push_back(winnerIndex);
     }
   }
+  // MultiplesPolicy::RemoveMultiples: do nothing.
+
+  return filteredIndices;
 }

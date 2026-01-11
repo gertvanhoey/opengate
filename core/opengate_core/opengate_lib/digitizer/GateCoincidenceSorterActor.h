@@ -81,9 +81,13 @@ protected:
   std::unique_ptr<TemporaryStorage> fFutureStorage;
 
   void ProcessTimeSortedSingles();
-  void DetectCoincidences();
+  void DetectCoincidences(bool lastCall = false);
   bool CoincidenceIsGood(const G4ThreeVector &pos1,
                          const G4ThreeVector &pos2) const;
+  std::vector<size_t>
+  ApplyPolicy(const std::vector<size_t> &secondSingleIndex,
+              const std::vector<double> &secondSingleEdep,
+              const std::vector<uint8_t> &goodCoincidence) const;
 
   struct threadLocalT {
     GateUniqueVolumeID::Pointer *volID;

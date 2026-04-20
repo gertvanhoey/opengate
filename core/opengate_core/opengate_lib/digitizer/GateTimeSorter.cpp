@@ -4,31 +4,7 @@
 #include "GateHelpersDigitizer.h"
 #include <G4Threading.hh>
 #include <memory>
-
-GateTimeSorter::TimeSortedStorage::TimeSortedStorage(
-    GateDigiCollection *input, GateDigiCollection *output,
-    const std::string &name_suffix) {
-
-  auto *manager = GateDigiCollectionManager::GetInstance();
-  const auto attribute_names = input->GetDigiAttributeNames();
-
-  // GateDigiCollection for temporary storage
-  digis = manager->NewDigiCollection(input->GetName() + "_" + name_suffix);
-  digis->InitDigiAttributesFromCopy(input);
-  digis->SetSharedStorage(true);
-
-  // Filler to copy from input collection to temporary collection
-  fillerIn =
-      std::make_unique<GateDigiAttributesFiller>(input, digis, attribute_names);
-
-  // Filler to copy from temporary to output collection
-  fillerOut = std::make_unique<GateDigiAttributesFiller>(digis, output,
-                                                         attribute_names);
-
-  // The GateDigiCollection contains the digis in the order in which they were
-  // added using fillerIn, but the actual sorting happens in the priority queue
-  // sortedIndices.
-}
+#include <utility>
 
 GateTimeSorter::GateTimeSorter() {
   fNumThreads = G4Threading::GetNumberOfRunningWorkerThreads();
@@ -43,24 +19,69 @@ void GateTimeSorter::Init(GateDigiCollection *input) {
   fInputCollection = input;
 
   auto *manager = GateDigiCollectionManager::GetInstance();
-  const auto attribute_names = fInputCollection->GetDigiAttributeNames();
 
-  // Create an output collection that will receive the time-sorted digis, and an
-  // iterator for the output collection.
-  fOutputCollection =
-      manager->NewDigiCollection(fInputCollection->GetName() + "_sorted");
+  const auto name = fInputCollection->GetName();
+
+  fBufferA = manager->NewDigiCollection(name + "_bufferA");
+  fBufferA->InitDigiAttributesFromCopy(fInputCollection);
+  fBufferA->SetSharedStorage(true);
+
+  fBufferB = manager->NewDigiCollection(name + "_bufferA");
+  fBufferB->InitDigiAttributesFromCopy(fInputCollection);
+  fBufferB->SetSharedStorage(true);
+
+  fSortedCollectionA = manager->NewDigiCollection(name + "_sortedA");
+  fSortedCollectionA->InitDigiAttributesFromCopy(input);
+  fSortedCollectionA->SetSharedStorage(true);
+  fSortedIndicesA.reset(new TimeSortedIndices);
+
+  fSortedCollectionB = manager->NewDigiCollection(name + "_sortedB");
+  fSortedCollectionB->InitDigiAttributesFromCopy(input);
+  fSortedCollectionB->SetSharedStorage(true);
+  fSortedIndicesB.reset(new TimeSortedIndices);
+
+  fOutputCollection = manager->NewDigiCollection(name + "_sortedOut");
   fOutputCollection->InitDigiAttributesFromCopy(fInputCollection);
   fOutputCollection->SetSharedStorage(true);
+
   fOutputIter = fOutputCollection->NewIterator();
 
-  // Create a TimeSortedStorage object for sorting digis.
-  fCurrentStorage = std::make_unique<TimeSortedStorage>(
-      fInputCollection, fOutputCollection, "temporaryA");
+  const auto attribute_names = input->GetDigiAttributeNames();
 
-  // Create a second TimeSortedStorage object that will be used later, when the
-  // first one's memory needs to be freed.
-  fFutureStorage = std::make_unique<TimeSortedStorage>(
-      fInputCollection, fOutputCollection, "temporaryB");
+  fFillers[{input, fSortedCollectionA}] =
+      std::make_unique<GateDigiAttributesFiller>(input, fSortedCollectionA,
+                                                 attribute_names);
+  fFillers[{input, fSortedCollectionB}] =
+      std::make_unique<GateDigiAttributesFiller>(input, fSortedCollectionB,
+                                                 attribute_names);
+
+  // fFillers[{input, fBufferA}] = std::make_unique<GateDigiAttributesFiller>(
+  //     input, fBufferA, attribute_names);
+  // fFillers[{input, fBufferB}] = std::make_unique<GateDigiAttributesFiller>(
+  //     input, fBufferB, attribute_names);
+  // fFillers[{fBufferA, fSortedCollectionA}] =
+  //     std::make_unique<GateDigiAttributesFiller>(fBufferA,
+  //     fSortedCollectionA,
+  //                                                attribute_names);
+  // fFillers[{fBufferB, fSortedCollectionA}] =
+  //     std::make_unique<GateDigiAttributesFiller>(fBufferB,
+  //     fSortedCollectionA,
+  //                                                attribute_names);
+  // fFillers[{fBufferA, fSortedCollectionB}] =
+  //     std::make_unique<GateDigiAttributesFiller>(fBufferA,
+  //     fSortedCollectionB,
+  //                                                attribute_names);
+  // fFillers[{fBufferB, fSortedCollectionB}] =
+  //     std::make_unique<GateDigiAttributesFiller>(fBufferB,
+  //     fSortedCollectionB,
+  //                                                attribute_names);
+
+  fFillers[{fSortedCollectionA, fOutputCollection}] =
+      std::make_unique<GateDigiAttributesFiller>(
+          fSortedCollectionA, fOutputCollection, attribute_names);
+  fFillers[{fSortedCollectionB, fOutputCollection}] =
+      std::make_unique<GateDigiAttributesFiller>(
+          fSortedCollectionB, fOutputCollection, attribute_names);
 
   fInitialized = true;
 }
@@ -127,12 +148,12 @@ void GateTimeSorter::Process() {
   double *t;
   iter.TrackAttribute("GlobalTime", &t);
 
-  auto &sortedIndices = fCurrentStorage->sortedIndices;
-
   // Iterate over the input collection and sort the digis.
+  auto fillerIn = fFillers[{fInputCollection, fSortedCollectionA}].get();
+  auto fillerOut = fFillers[{fSortedCollectionA, fOutputCollection}].get();
   iter.GoToBegin();
   while (!iter.IsAtEnd()) {
-    const size_t digiIndex = fCurrentStorage->digis->GetSize();
+    const size_t digiIndex = fSortedCollectionA->GetSize();
     const double digiTime = *t;
     if (fMostRecentTimeDeparted.has_value() &&
         (digiTime < *fMostRecentTimeDeparted)) {
@@ -155,9 +176,9 @@ void GateTimeSorter::Process() {
         fMaxGlobalTimePerThread[tid].store(std::max(currentMax, digiTime));
       }
       // Copy the digi into the temporary digi collection.
-      fCurrentStorage->fillerIn->Fill(iter.fIndex);
+      fillerIn->Fill(iter.fIndex);
       // Keep a time-sorted list of indices into the temporary digi collection.
-      sortedIndices.push({digiIndex, digiTime});
+      fSortedIndicesA->push({digiIndex, digiTime});
 
       // Keep track of the highest GlobalTime observed so far.
       if (!fMostRecentTimeArrived || (digiTime > *fMostRecentTimeArrived)) {
@@ -186,21 +207,21 @@ void GateTimeSorter::Process() {
   // Copy the oldest digis from the sorted temporary storage into the output
   // collection. Continue as long as the newest digi is at least fSortingWindow
   // more recent than the oldest digi.
-  while (
-      !sortedIndices.empty() &&
-      (*fMostRecentTimeArrived - sortedIndices.top().time > fSortingWindow)) {
+  while (!fSortedIndicesA->empty() &&
+         (*fMostRecentTimeArrived - fSortedIndicesA->top().time >
+          fSortingWindow)) {
     // Copy oldest digi into the output collection.
-    fCurrentStorage->fillerOut->Fill(sortedIndices.top().index);
+    fillerOut->Fill(fSortedIndicesA->top().index);
     // Keep track of the GlobalTime of the last digi that was copied.
-    fMostRecentTimeDeparted = sortedIndices.top().time;
+    fMostRecentTimeDeparted = fSortedIndicesA->top().time;
     // Remove the time-sorted index of the digi.
-    sortedIndices.pop();
+    fSortedIndicesA->pop();
   }
 
   // The temporary digi collection keeps growing as more digis are processed.
   // The digis that have already been copied to the output must be removed once
   // in a while to limit memory usage.
-  if (fCurrentStorage->digis->GetSize() > fMaxSize) {
+  if (fSortedCollectionA->GetSize() > fMaxSize) {
     Prune();
   }
 }
@@ -224,10 +245,10 @@ void GateTimeSorter::Flush() {
   // it is known that no more digis will be processed from the input.
   // As a consequence, the sorting window does not have to be taken into account
   // while flushing.
-  auto &sortedIndices = fCurrentStorage->sortedIndices;
-  while (sortedIndices.size() > 0) {
-    fCurrentStorage->fillerOut->Fill(sortedIndices.top().index);
-    sortedIndices.pop();
+  auto fillerOut = fFillers[{fSortedCollectionA, fOutputCollection}].get();
+  while (fSortedIndicesA->size() > 0) {
+    fillerOut->Fill(fSortedIndicesA->top().index);
+    fSortedIndicesA->pop();
   }
   Prune();
   fFlushed = true;
@@ -249,20 +270,23 @@ void GateTimeSorter::Prune() {
   // 3. The two instances of TimeSortedStorage are swapped.
 
   // Step 1
+  std::cout << "GateTimeSorter::Prune()\n";
   GateDigiAttributesFiller transferFiller(
-      fCurrentStorage->digis, fFutureStorage->digis,
-      fCurrentStorage->digis->GetDigiAttributeNames());
-  auto &sortedIndices = fCurrentStorage->sortedIndices;
-  while (!sortedIndices.empty()) {
-    const auto timed_index = sortedIndices.top();
-    sortedIndices.pop();
-    const size_t digiIndex = fFutureStorage->digis->GetSize();
+      fSortedCollectionA, fSortedCollectionB,
+      fSortedCollectionA->GetDigiAttributeNames());
+  // auto &sortedIndices = fCurrentStorage->sortedIndices;
+  while (!fSortedIndicesA->empty()) {
+    const auto timed_index = fSortedIndicesA->top();
+    fSortedIndicesA->pop();
+    const size_t digiIndex = fSortedCollectionB->GetSize();
     const double digiTime = timed_index.time;
     transferFiller.Fill(timed_index.index);
-    fFutureStorage->sortedIndices.push({digiIndex, digiTime});
+    fSortedIndicesB->push({digiIndex, digiTime});
   }
   // Step 2
-  fCurrentStorage->digis->Clear();
+  fSortedCollectionA->Clear();
+
   // Step 3
-  std::swap(fCurrentStorage, fFutureStorage);
+  std::swap(fSortedCollectionA, fSortedCollectionB);
+  std::swap(fSortedIndicesA, fSortedIndicesB);
 }

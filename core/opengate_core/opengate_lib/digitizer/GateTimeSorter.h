@@ -3,6 +3,7 @@
 
 #include "GateDigiCollectionIterator.h"
 #include <atomic>
+#include <map>
 #include <memory>
 #include <optional>
 #include <queue>
@@ -39,17 +40,9 @@ private:
     }
   };
 
-  struct TimeSortedStorage {
-    TimeSortedStorage(GateDigiCollection *input, GateDigiCollection *output,
-                      const std::string &name_suffix);
-
-    GateDigiCollection *digis;
-    std::priority_queue<TimedDigiIndex, std::vector<TimedDigiIndex>,
-                        std::greater<TimedDigiIndex>>
-        sortedIndices;
-    std::unique_ptr<GateDigiAttributesFiller> fillerIn;
-    std::unique_ptr<GateDigiAttributesFiller> fillerOut;
-  };
+  typedef std::priority_queue<TimedDigiIndex, std::vector<TimedDigiIndex>,
+                              std::greater<TimedDigiIndex>>
+      TimeSortedIndices;
 
   double fMinimumSortingWindow{1000.0}; // nanoseconds
   double fSortingWindow{1000.0};
@@ -59,8 +52,20 @@ private:
 
   GateDigiCollection *fInputCollection;
 
+  GateDigiCollection *fBufferA;
+  GateDigiCollection *fBufferB;
+
+  GateDigiCollection *fSortedCollectionA;
+  std::unique_ptr<TimeSortedIndices> fSortedIndicesA;
+  GateDigiCollection *fSortedCollectionB;
+  std::unique_ptr<TimeSortedIndices> fSortedIndicesB;
+
   GateDigiCollection *fOutputCollection;
   GateDigiCollectionIterator fOutputIter;
+
+  std::map<std::pair<GateDigiCollection *, GateDigiCollection *>,
+           std::unique_ptr<GateDigiAttributesFiller>>
+      fFillers;
 
   bool fInitialized{false};
   bool fProcessingStarted{false};
@@ -69,9 +74,6 @@ private:
   size_t fNumDroppedDigi{};
   std::optional<double> fMostRecentTimeArrived;
   std::optional<double> fMostRecentTimeDeparted;
-
-  std::unique_ptr<TimeSortedStorage> fCurrentStorage;
-  std::unique_ptr<TimeSortedStorage> fFutureStorage;
 };
 
 #endif // GateTimeSorter_h

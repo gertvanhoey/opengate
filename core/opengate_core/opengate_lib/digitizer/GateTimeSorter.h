@@ -24,6 +24,7 @@ public:
   std::unique_ptr<GateDigiAttributesFiller>
   CreateFiller(GateDigiCollection *destination);
   GateDigiCollection::Iterator &OutputIterator();
+  void Ingest();
   void Process();
   void MarkOutputAsProcessed();
   void Flush();

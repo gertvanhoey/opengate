@@ -31,12 +31,12 @@ void GateTimeSorter::Init(GateDigiCollection *input) {
   fBufferB->SetSharedStorage(true);
 
   fSortedCollectionA = manager->NewDigiCollection(name + "_sortedA");
-  fSortedCollectionA->InitDigiAttributesFromCopy(input);
+  fSortedCollectionA->InitDigiAttributesFromCopy(fInputCollection);
   fSortedCollectionA->SetSharedStorage(true);
   fSortedIndicesA.reset(new TimeSortedIndices);
 
   fSortedCollectionB = manager->NewDigiCollection(name + "_sortedB");
-  fSortedCollectionB->InitDigiAttributesFromCopy(input);
+  fSortedCollectionB->InitDigiAttributesFromCopy(fInputCollection);
   fSortedCollectionB->SetSharedStorage(true);
   fSortedIndicesB.reset(new TimeSortedIndices);
 
@@ -46,35 +46,26 @@ void GateTimeSorter::Init(GateDigiCollection *input) {
 
   fOutputIter = fOutputCollection->NewIterator();
 
-  const auto attribute_names = input->GetDigiAttributeNames();
+  const auto attribute_names = fInputCollection->GetDigiAttributeNames();
 
-  fFillers[{input, fSortedCollectionA}] =
-      std::make_unique<GateDigiAttributesFiller>(input, fSortedCollectionA,
+  fFillers[{fInputCollection, fBufferA}] =
+      std::make_unique<GateDigiAttributesFiller>(fInputCollection, fBufferA,
                                                  attribute_names);
-  fFillers[{input, fSortedCollectionB}] =
-      std::make_unique<GateDigiAttributesFiller>(input, fSortedCollectionB,
+  fFillers[{fInputCollection, fBufferB}] =
+      std::make_unique<GateDigiAttributesFiller>(fInputCollection, fBufferB,
                                                  attribute_names);
-
-  // fFillers[{input, fBufferA}] = std::make_unique<GateDigiAttributesFiller>(
-  //     input, fBufferA, attribute_names);
-  // fFillers[{input, fBufferB}] = std::make_unique<GateDigiAttributesFiller>(
-  //     input, fBufferB, attribute_names);
-  // fFillers[{fBufferA, fSortedCollectionA}] =
-  //     std::make_unique<GateDigiAttributesFiller>(fBufferA,
-  //     fSortedCollectionA,
-  //                                                attribute_names);
-  // fFillers[{fBufferB, fSortedCollectionA}] =
-  //     std::make_unique<GateDigiAttributesFiller>(fBufferB,
-  //     fSortedCollectionA,
-  //                                                attribute_names);
-  // fFillers[{fBufferA, fSortedCollectionB}] =
-  //     std::make_unique<GateDigiAttributesFiller>(fBufferA,
-  //     fSortedCollectionB,
-  //                                                attribute_names);
-  // fFillers[{fBufferB, fSortedCollectionB}] =
-  //     std::make_unique<GateDigiAttributesFiller>(fBufferB,
-  //     fSortedCollectionB,
-  //                                                attribute_names);
+  fFillers[{fBufferA, fSortedCollectionA}] =
+      std::make_unique<GateDigiAttributesFiller>(fBufferA, fSortedCollectionA,
+                                                 attribute_names);
+  fFillers[{fBufferB, fSortedCollectionA}] =
+      std::make_unique<GateDigiAttributesFiller>(fBufferB, fSortedCollectionA,
+                                                 attribute_names);
+  fFillers[{fBufferA, fSortedCollectionB}] =
+      std::make_unique<GateDigiAttributesFiller>(fBufferA, fSortedCollectionB,
+                                                 attribute_names);
+  fFillers[{fBufferB, fSortedCollectionB}] =
+      std::make_unique<GateDigiAttributesFiller>(fBufferB, fSortedCollectionB,
+                                                 attribute_names);
 
   fFillers[{fSortedCollectionA, fOutputCollection}] =
       std::make_unique<GateDigiAttributesFiller>(
@@ -98,7 +89,7 @@ void GateTimeSorter::SetSortingWindow(double duration) {
   // caused by a DigitizerBlurringActor with blur_attribute "GlobalTime".
 
   if (fProcessingStarted) {
-    Fatal("SetDelay() cannot be called after Process() has been called.");
+    Fatal("SetDelay() cannot be called after Ingest() has been called.");
   }
   fMinimumSortingWindow = duration;
   fSortingWindow = duration;
@@ -106,7 +97,7 @@ void GateTimeSorter::SetSortingWindow(double duration) {
 
 void GateTimeSorter::SetMaxSize(size_t maxSize) {
   if (fProcessingStarted) {
-    Fatal("SetMaxSize() cannot be called after Process() has been called.");
+    Fatal("SetMaxSize() cannot be called after Ingest() has been called.");
   }
   fMaxSize = maxSize;
 }
@@ -133,23 +124,41 @@ GateDigiCollection::Iterator &GateTimeSorter::OutputIterator() {
   return fOutputIter;
 }
 
+void GateTimeSorter::Ingest() {
+  if (fFlushed) {
+    Fatal("Ingest() called after Flush(). The time sorter must not be used "
+          "after it was flushed.");
+  }
+  fProcessingStarted = true;
+
+  auto filler = fFillers[{fInputCollection, fBufferA}].get();
+  auto iter = fInputCollection->NewIterator();
+  iter.GoToBegin();
+  while (!iter.IsAtEnd()) {
+    filler->Fill(iter.fIndex);
+    iter++;
+  }
+}
+
 void GateTimeSorter::Process() {
   // Processes all digis from the input collection by copying and sorting them
   // according to GlobalTime. Next, copies the oldest sorted digis to the output
   // collection.
 
   if (fFlushed) {
-    Fatal("Process called after Flush(). The time sorter must not be used "
+    Fatal("Process() called after Flush(). The time sorter must not be used "
           "after it was flushed.");
   }
-  fProcessingStarted = true;
 
-  auto iter = fInputCollection->NewIterator();
+  std::swap(fBufferA, fBufferB);
+  fBufferA->Clear();
+
+  auto iter = fBufferB->NewIterator();
   double *t;
   iter.TrackAttribute("GlobalTime", &t);
 
   // Iterate over the input collection and sort the digis.
-  auto fillerIn = fFillers[{fInputCollection, fSortedCollectionA}].get();
+  auto fillerIn = fFillers[{fBufferB, fSortedCollectionA}].get();
   auto fillerOut = fFillers[{fSortedCollectionA, fOutputCollection}].get();
   iter.GoToBegin();
   while (!iter.IsAtEnd()) {
@@ -270,7 +279,6 @@ void GateTimeSorter::Prune() {
   // 3. The two instances of TimeSortedStorage are swapped.
 
   // Step 1
-  std::cout << "GateTimeSorter::Prune()\n";
   GateDigiAttributesFiller transferFiller(
       fSortedCollectionA, fSortedCollectionB,
       fSortedCollectionA->GetDigiAttributeNames());

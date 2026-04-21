@@ -192,6 +192,7 @@ void GateCoincidenceSorterActor::DigitInitialize(
 
 void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
   G4AutoLock lock(&fMutex);
+  fTimeSorter->Ingest();
   fTimeSorter->Process();
   ProcessTimeSortedSingles();
   DetectCoincidences();

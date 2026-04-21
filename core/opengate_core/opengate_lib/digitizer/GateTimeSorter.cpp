@@ -129,13 +129,23 @@ void GateTimeSorter::Ingest() {
     Fatal("Ingest() called after Flush(). The time sorter must not be used "
           "after it was flushed.");
   }
+  G4AutoLock lock(&fMutex);
+
   fProcessingStarted = true;
 
   auto filler = fFillers[{fInputCollection, fBufferA}].get();
   auto iter = fInputCollection->NewIterator();
+  double *t;
+  iter.TrackAttribute("GlobalTime", &t);
+
   iter.GoToBegin();
   while (!iter.IsAtEnd()) {
     filler->Fill(iter.fIndex);
+    if (fNumThreads > 1) {
+      const int tid = G4Threading::G4GetThreadId();
+      const double currentMax = fMaxGlobalTimePerThread[tid].load();
+      fMaxGlobalTimePerThread[tid].store(std::max(currentMax, *t));
+    }
     iter++;
   }
 }
@@ -150,8 +160,11 @@ void GateTimeSorter::Process() {
           "after it was flushed.");
   }
 
-  std::swap(fBufferA, fBufferB);
-  fBufferA->Clear();
+  {
+    G4AutoLock lock(&fMutex);
+    std::swap(fBufferA, fBufferB);
+    fBufferA->Clear();
+  }
 
   auto iter = fBufferB->NewIterator();
   double *t;
@@ -179,11 +192,6 @@ void GateTimeSorter::Process() {
         fSortingWindowWarningIssued = true;
       }
     } else {
-      if (fNumThreads > 1) {
-        const int tid = G4Threading::G4GetThreadId();
-        const double currentMax = fMaxGlobalTimePerThread[tid].load();
-        fMaxGlobalTimePerThread[tid].store(std::max(currentMax, digiTime));
-      }
       // Copy the digi into the temporary digi collection.
       fillerIn->Fill(iter.fIndex);
       // Keep a time-sorted list of indices into the temporary digi collection.

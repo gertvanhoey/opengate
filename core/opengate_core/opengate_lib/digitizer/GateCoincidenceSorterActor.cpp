@@ -191,15 +191,19 @@ void GateCoincidenceSorterActor::DigitInitialize(
 }
 
 void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
-  G4AutoLock lock(&fMutex);
   fTimeSorter->Ingest();
-  fTimeSorter->Process();
-  ProcessTimeSortedSingles();
-  DetectCoincidences();
+  if (fNumActiveWorkingThreads <= 1 ||
+      G4Threading::G4GetThreadId() == fRoundRobin.load()) {
+    fTimeSorter->Process();
+    ProcessTimeSortedSingles();
+    DetectCoincidences();
+    if (fNumActiveWorkingThreads > 1) {
+      fRoundRobin.store((fRoundRobin.load() + 1) % fNumActiveWorkingThreads);
+    }
+  }
 }
 
 void GateCoincidenceSorterActor::EndOfRunAction(const G4Run *) {
-  G4AutoLock lock(&fMutex);
   if (fNumActiveWorkingThreads > 1) {
     fNumActiveWorkingThreads--;
   } else {

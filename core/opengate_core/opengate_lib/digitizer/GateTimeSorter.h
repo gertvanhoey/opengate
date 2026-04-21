@@ -2,6 +2,7 @@
 #define GateTimeSorter_h
 
 #include "GateDigiCollectionIterator.h"
+#include <G4Threading.hh>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -50,6 +51,7 @@ private:
   size_t fMaxSize{100'000};
   std::unique_ptr<std::atomic<double>[]> fMaxGlobalTimePerThread;
   int fNumThreads{0};
+  G4Mutex fMutex;
 
   GateDigiCollection *fInputCollection;
 

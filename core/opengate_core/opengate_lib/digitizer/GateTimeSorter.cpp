@@ -173,6 +173,25 @@ void GateTimeSorter::Process() {
   // Iterate over the input collection and sort the digis.
   auto fillerIn = fFillers[{fBufferB, fSortedCollectionA}].get();
   auto fillerOut = fFillers[{fSortedCollectionA, fOutputCollection}].get();
+
+  // Compute the adaptive sorting window once per Process() call rather than
+  // once per digi. Doing it per-digi causes O(N*D) atomic loads (N threads,
+  // D digis) and severe false sharing: all N atomic<double> elements fit on
+  // one cache line, so every Ingest() write by a loser thread invalidates the
+  // cache line for the winner thread's tight inner loop.
+  if (fNumThreads > 1) {
+    auto [minIt, maxIt] = std::minmax_element(
+        fMaxGlobalTimePerThread.get(),
+        fMaxGlobalTimePerThread.get() + fNumThreads,
+        [](const std::atomic<double> &a, const std::atomic<double> &b) {
+          return a.load() < b.load();
+        });
+    const auto window = fMinimumSortingWindow + maxIt->load() - minIt->load();
+    if (window > fSortingWindow) {
+      fSortingWindow = window;
+    }
+  }
+
   iter.GoToBegin();
   while (!iter.IsAtEnd()) {
     const size_t digiIndex = fSortedCollectionA->GetSize();
@@ -200,22 +219,6 @@ void GateTimeSorter::Process() {
       // Keep track of the highest GlobalTime observed so far.
       if (!fMostRecentTimeArrived || (digiTime > *fMostRecentTimeArrived)) {
         fMostRecentTimeArrived = digiTime;
-      }
-      // Increase sorting window if needed.
-      if (fNumThreads > 1) {
-        auto [minIt, maxIt] = std::minmax_element(
-            fMaxGlobalTimePerThread.get(),
-            fMaxGlobalTimePerThread.get() + fNumThreads,
-            [](const std::atomic<double> &a, const std::atomic<double> &b) {
-              return a.load() < b.load();
-            });
-        double globalTimeSlowestThread = minIt->load();
-        double globalTimeFastestThread = maxIt->load();
-        const auto window = fMinimumSortingWindow + globalTimeFastestThread -
-                            globalTimeSlowestThread;
-        if (window > fSortingWindow) {
-          fSortingWindow = window;
-        }
       }
     }
     iter++;

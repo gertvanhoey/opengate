@@ -204,9 +204,7 @@ void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
 }
 
 void GateCoincidenceSorterActor::EndOfRunAction(const G4Run *) {
-  if (fNumActiveWorkingThreads > 1) {
-    fNumActiveWorkingThreads--;
-  } else {
+  if (fNumActiveWorkingThreads.fetch_sub(1) <= 1) {
     fTimeSorter->Flush();
     ProcessTimeSortedSingles();
     DetectCoincidences(true);

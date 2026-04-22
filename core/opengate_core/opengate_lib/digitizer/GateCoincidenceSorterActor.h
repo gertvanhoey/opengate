@@ -85,7 +85,7 @@ protected:
 
   std::atomic<size_t> fIterPosition{};
   std::atomic<size_t> fNumActiveWorkingThreads{};
-  std::atomic<int> fRoundRobin{};
+  std::atomic<bool> fProcessing{};
 
   void ProcessTimeSortedSingles();
   void DetectCoincidences(bool lastCall = false);

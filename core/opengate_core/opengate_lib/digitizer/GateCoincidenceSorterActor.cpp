@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <random>
 
 GateCoincidenceSorterActor::TemporaryStorage::TemporaryStorage(
     GateDigiCollection *input, GateDigiCollection *output,
@@ -192,13 +193,16 @@ void GateCoincidenceSorterActor::DigitInitialize(
 
 void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
   fTimeSorter->Ingest();
-  if (fNumActiveWorkingThreads <= 1 ||
-      G4Threading::G4GetThreadId() == fRoundRobin.load()) {
-    fTimeSorter->Process();
-    ProcessTimeSortedSingles();
-    DetectCoincidences();
-    if (fNumActiveWorkingThreads > 1) {
-      fRoundRobin.store((fRoundRobin.load() + 1) % fNumActiveWorkingThreads);
+  const auto numThreads = fNumActiveWorkingThreads.load();
+  thread_local std::mt19937 rng{std::random_device{}()};
+  if (numThreads <= 1 ||
+      std::uniform_int_distribution<size_t>(0, numThreads - 1)(rng) == 0) {
+    bool expected = false;
+    if (fProcessing.compare_exchange_strong(expected, true)) {
+      fTimeSorter->Process();
+      ProcessTimeSortedSingles();
+      DetectCoincidences();
+      fProcessing.store(false);
     }
   }
 }

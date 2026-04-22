@@ -193,22 +193,21 @@ void GateCoincidenceSorterActor::DigitInitialize(
 
 void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
   fTimeSorter->Ingest();
-  const auto numThreads = fNumActiveWorkingThreads.load();
-  thread_local std::mt19937 rng{std::random_device{}()};
-  if (numThreads <= 1 ||
-      std::uniform_int_distribution<size_t>(0, numThreads - 1)(rng) == 0) {
+  if (!fProcessing.load(std::memory_order_relaxed)) {
     bool expected = false;
-    if (fProcessing.compare_exchange_strong(expected, true)) {
+    if (fProcessing.compare_exchange_strong(expected, true,
+                                            std::memory_order_acquire,
+                                            std::memory_order_relaxed)) {
       fTimeSorter->Process();
       ProcessTimeSortedSingles();
       DetectCoincidences();
-      fProcessing.store(false);
+      fProcessing.store(false, std::memory_order_release);
     }
   }
 }
 
 void GateCoincidenceSorterActor::EndOfRunAction(const G4Run *) {
-  if (fNumActiveWorkingThreads.fetch_sub(1) <= 1) {
+  if (fNumActiveWorkingThreads.fetch_sub(1, std::memory_order_acq_rel) <= 1) {
     fTimeSorter->Flush();
     ProcessTimeSortedSingles();
     DetectCoincidences(true);

@@ -83,7 +83,7 @@ protected:
   std::unique_ptr<TemporaryStorage> fCurrentStorage;
   std::unique_ptr<TemporaryStorage> fFutureStorage;
 
-  std::atomic<size_t> fIterPosition{};
+  size_t fIterPosition{};
   std::atomic<size_t> fNumActiveWorkingThreads{};
   std::atomic<bool> fProcessing{};
 

@@ -139,15 +139,15 @@ void GateTimeSorter::Ingest() {
   iter.TrackAttribute("GlobalTime", &t);
 
   iter.GoToBegin();
+  const int tid = G4Threading::G4GetThreadId();
+  const double currentMax = fMaxGlobalTimePerThread[tid].load();
+  double newMax = currentMax;
   while (!iter.IsAtEnd()) {
     filler->Fill(iter.fIndex);
-    if (fNumThreads > 1) {
-      const int tid = G4Threading::G4GetThreadId();
-      const double currentMax = fMaxGlobalTimePerThread[tid].load();
-      fMaxGlobalTimePerThread[tid].store(std::max(currentMax, *t));
-    }
+    newMax = std::max(newMax, *t);
     iter++;
   }
+  fMaxGlobalTimePerThread[tid].store(newMax);
 }
 
 void GateTimeSorter::Process() {

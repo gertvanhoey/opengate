@@ -49,7 +49,14 @@ private:
   double fMinimumSortingWindow{1000.0}; // nanoseconds
   double fSortingWindow{1000.0};
   size_t fMaxSize{100'000};
-  std::unique_ptr<std::atomic<double>[]> fMaxGlobalTimePerThread;
+
+  // Pad atomic<double> to one cache line (64 bytes) to prevent false sharing
+  // when N threads each write to their own element in a tight loop.
+  struct alignas(64) PaddedAtomicDouble {
+    std::atomic<double> value{0.0};
+  };
+
+  std::unique_ptr<PaddedAtomicDouble[]> fMaxGlobalTimePerThread;
   int fNumThreads{0};
   G4Mutex fMutex;
 

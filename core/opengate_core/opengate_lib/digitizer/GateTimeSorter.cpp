@@ -8,8 +8,7 @@
 
 GateTimeSorter::GateTimeSorter() {
   fNumThreads = G4Threading::GetNumberOfRunningWorkerThreads();
-  fMaxGlobalTimePerThread =
-      std::make_unique<std::atomic<double>[]>(fNumThreads);
+  fMaxGlobalTimePerThread = std::make_unique<PaddedAtomicDouble[]>(fNumThreads);
 }
 
 void GateTimeSorter::Init(GateDigiCollection *input) {
@@ -125,6 +124,7 @@ GateDigiCollection::Iterator &GateTimeSorter::OutputIterator() {
 }
 
 void GateTimeSorter::Ingest() {
+  // std::cout << "Ingest " << G4Threading::G4GetThreadId() << "\n";
   if (fFlushed) {
     Fatal("Ingest() called after Flush(). The time sorter must not be used "
           "after it was flushed.");
@@ -140,17 +140,22 @@ void GateTimeSorter::Ingest() {
 
   iter.GoToBegin();
   const int tid = G4Threading::G4GetThreadId();
-  const double currentMax = fMaxGlobalTimePerThread[tid].load();
+  const double currentMax = fMaxGlobalTimePerThread[tid].value.load();
   double newMax = currentMax;
   while (!iter.IsAtEnd()) {
     filler->Fill(iter.fIndex);
     newMax = std::max(newMax, *t);
     iter++;
   }
-  fMaxGlobalTimePerThread[tid].store(newMax);
+  fMaxGlobalTimePerThread[tid].value.store(newMax);
 }
 
 void GateTimeSorter::Process() {
+  // std::cout << "Inside Process " << G4Threading::G4GetThreadId() << "\n";
+  // for (int i = 0; i < fNumThreads; ++i) {
+  //   std::cout << "fMaxGlobalTimePerThread[" << i
+  //             << "] = " << fMaxGlobalTimePerThread[i].value.load() << "\n";
+  // }
   // Processes all digis from the input collection by copying and sorting them
   // according to GlobalTime. Next, copies the oldest sorted digis to the output
   // collection.
@@ -170,6 +175,12 @@ void GateTimeSorter::Process() {
   double *t;
   iter.TrackAttribute("GlobalTime", &t);
 
+  if (fBufferB->GetSize() == 0) {
+    return;
+  }
+
+  // TODO return if nothing to process: fBufferB empty
+
   // Iterate over the input collection and sort the digis.
   auto fillerIn = fFillers[{fBufferB, fSortedCollectionA}].get();
   auto fillerOut = fFillers[{fSortedCollectionA, fOutputCollection}].get();
@@ -183,12 +194,15 @@ void GateTimeSorter::Process() {
     auto [minIt, maxIt] = std::minmax_element(
         fMaxGlobalTimePerThread.get(),
         fMaxGlobalTimePerThread.get() + fNumThreads,
-        [](const std::atomic<double> &a, const std::atomic<double> &b) {
-          return a.load() < b.load();
+        [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
+          return a.value.load() < b.value.load();
         });
-    const auto window = fMinimumSortingWindow + maxIt->load() - minIt->load();
+    const auto window =
+        fMinimumSortingWindow + maxIt->value.load() - minIt->value.load();
     if (window > fSortingWindow) {
+      // TODO reduce sorting window if possible
       fSortingWindow = window;
+      // std::cout << "sorting window " << fSortingWindow << "\n";
     }
   }
 
@@ -238,10 +252,13 @@ void GateTimeSorter::Process() {
     fSortedIndicesA->pop();
   }
 
+  // std::cout << fSortedIndicesA->size() << " sorted indices\n";
+
   // The temporary digi collection keeps growing as more digis are processed.
   // The digis that have already been copied to the output must be removed once
   // in a while to limit memory usage.
-  if (fSortedCollectionA->GetSize() > fMaxSize) {
+  if (fSortedCollectionA->GetSize() > fMaxSize &&
+      fSortedIndicesA->size() < fMaxSize / 2) {
     Prune();
   }
 }

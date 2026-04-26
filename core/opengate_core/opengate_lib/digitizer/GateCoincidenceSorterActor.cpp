@@ -180,6 +180,7 @@ void GateCoincidenceSorterActor::BeginOfRunActionMasterThread(int run_id) {
       fTimeSorter->OutputCollection(), fOutputDigiCollection, "B");
 
   fNumActiveWorkingThreads = G4Threading::GetNumberOfRunningWorkerThreads();
+  // fNumProcessCalls.resize(fNumActiveWorkingThreads, 0);
 }
 
 void GateCoincidenceSorterActor::SetGroupVolumeDepth(const int depth) {
@@ -193,12 +194,18 @@ void GateCoincidenceSorterActor::DigitInitialize(
 
 void GateCoincidenceSorterActor::EndOfEventAction(const G4Event *) {
   fTimeSorter->Ingest();
+  // TODO only continue after a minimum of consecutive ingest calls
   if (!fProcessing.load(std::memory_order_relaxed)) {
+    // if (!fProcessing.load(std::memory_order_acquire)) {
     bool expected = false;
     if (fProcessing.compare_exchange_strong(expected, true,
                                             std::memory_order_acquire,
                                             std::memory_order_relaxed)) {
+      // fNumProcessCalls[G4Threading::G4GetThreadId()]++;
       fTimeSorter->Process();
+      // std::cout << "numCalls " <<
+      // fNumProcessCalls[G4Threading::G4GetThreadId()]
+      //           << "\n";
       ProcessTimeSortedSingles();
       DetectCoincidences();
       fProcessing.store(false, std::memory_order_release);
@@ -213,6 +220,10 @@ void GateCoincidenceSorterActor::EndOfRunAction(const G4Run *) {
     DetectCoincidences(true);
   }
   fOutputDigiCollection->FillToRootIfNeeded(true);
+  // std::cout << "EndOfRun for " << G4Threading::G4GetThreadId() << " (after "
+  //           << fNumProcessCalls[G4Threading::G4GetThreadId()]
+  //           << " calls), there are " << fNumActiveWorkingThreads.load()
+  //           << " left\n";
 }
 
 void GateCoincidenceSorterActor::ProcessTimeSortedSingles() {
@@ -234,6 +245,9 @@ void GateCoincidenceSorterActor::ProcessTimeSortedSingles() {
 }
 
 void GateCoincidenceSorterActor::DetectCoincidences(bool lastCall) {
+  // if (lastCall) {
+  //   std::cout << "lastCall " << G4Threading::G4GetThreadId() << "\n";
+  // }
 
   if (fCurrentStorage->earliestTime && fCurrentStorage->latestTime) {
     double *t;
@@ -248,11 +262,14 @@ void GateCoincidenceSorterActor::DetectCoincidences(bool lastCall) {
 
     iter.fIndex = fIterPosition;
     iter.GoTo(fIterPosition);
+    // std::cout << "Items in fCurrentStorage->digis from iter.fIndex to end: "
+    //           << (fCurrentStorage->digis->GetSize() - iter.fIndex) << "\n";
     while ((*fCurrentStorage->latestTime - *fCurrentStorage->earliestTime >
             fWindowSize + fWindowOffset) ||
            (lastCall &&
             *fCurrentStorage->latestTime - *fCurrentStorage->earliestTime >
                 fWindowOffset)) {
+      // std::cout << "Begin coincidence detection\n";
 
       const auto i0 = iter.fIndex;
       const auto t0 = *t;

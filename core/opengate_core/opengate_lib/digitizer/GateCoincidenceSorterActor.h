@@ -84,8 +84,10 @@ protected:
   std::unique_ptr<TemporaryStorage> fFutureStorage;
 
   size_t fIterPosition{};
-  std::atomic<size_t> fNumActiveWorkingThreads{};
+  std::atomic<int> fNumActiveWorkingThreads{};
   std::atomic<bool> fProcessing{};
+
+  // std::vector<int> fNumProcessCalls;
 
   void ProcessTimeSortedSingles();
   void DetectCoincidences(bool lastCall = false);

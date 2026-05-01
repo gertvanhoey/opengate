@@ -21,7 +21,6 @@ GateCoincidenceSorterActor::TemporaryStorage::TemporaryStorage(
   const auto attribute_names = input->GetDigiAttributeNames();
 
   // GateDigiCollection for temporary storage
-  // TODO name OK?
   digis = manager->NewDigiCollection(input->GetName() + "_" + name_suffix);
   digis->InitDigiAttributesFromCopy(input);
   digis->SetSharedStorage(true);
@@ -39,7 +38,7 @@ GateCoincidenceSorterActor::GateCoincidenceSorterActor(py::dict &user_info)
     : GateVDigitizerWithOutputActor(user_info, true) {
   fActions.insert("StartSimulationAction");
   fActions.insert("EndOfEventAction");
-  fActions.insert("EndOfRunAction"); // Works without?
+  fActions.insert("EndOfRunAction");
 }
 
 GateCoincidenceSorterActor::~GateCoincidenceSorterActor() = default;
@@ -122,6 +121,9 @@ void GateCoincidenceSorterActor::StartSimulationAction() {
   }
   fOutputDigiCollection->SetFilenameAndInitRoot(outputPath);
 
+  // Create the attributes for coincidence digis. They have the same names as
+  // the attributes of the single digis, but with a "1" or "2" suffix (for the
+  // first and second single in the coincidence pair).
   const auto attribute_names = fInputDigiCollection->GetDigiAttributeNames();
   const std::string suffix1 = "1";
   const std::string suffix2 = "2";
@@ -168,11 +170,25 @@ void GateCoincidenceSorterActor::StartSimulationAction() {
 }
 
 void GateCoincidenceSorterActor::BeginOfRunActionMasterThread(int run_id) {
+
+  // Create, initialize and configure the time sorter.
+  // The time sorter will create a single time-sorted stream containing all
+  // digis from all threads, so that the coincidence actor can identify
+  // coincidences between singles, irrespective of the thread in which they were
+  // simulated (prompt as well as random coincidences).
   fTimeSorter = std::make_unique<GateTimeSorter>();
   fTimeSorter->Init(fInputDigiCollection);
   fTimeSorter->SetSortingWindow(fSortingTime);
   fTimeSorter->SetMaxSize(fClearEveryNEvents);
 
+  // Create temporary storage, which stores time-sorted digis until a
+  // sufficiently large GlobalTime range is covered to allow for coincidence
+  // detection.
+  // The memory consumption of the "current" temporary storage grows as the
+  // simulation progresses, because already processed digis remain in the
+  // storage. For that reason, a second "future" temporary storage is created,
+  // which will be used later for taking over the not-yet-processed digis, so
+  // that the "current" one can be cleared to reclaim memory.
   fCurrentStorage = std::make_unique<TemporaryStorage>(
       fTimeSorter->OutputCollection(), fOutputDigiCollection, "A");
   fFutureStorage = std::make_unique<TemporaryStorage>(

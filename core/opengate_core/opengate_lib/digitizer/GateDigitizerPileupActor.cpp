@@ -180,39 +180,34 @@ void GateDigitizerPileupActor::ProcessTimeSortedDigis() {
 
     const auto current_time = *fTimeSorterOutputTime;
     const auto current_edep = *fTimeSorterOutputEdep;
-    if (window.digis->GetSize() == 0) {
-      // The window has no digis yet: make the window start at the time of the
-      // current digi and remember the current edep as highest.
-      window.startTime = current_time;
-      window.highestEdep = current_edep;
-      fWindowExpiry.push({window.hash, window.startTime + fTimeWindow});
-    } else if (current_time - window.startTime > fTimeWindow) {
-      // TODO change description
-      // The current digi is beyond the time window: process the digis that are
-      // currently in the window, then make the window start at the time of the
-      // current digi and remember the current edep as highest.
-      ProcessPileupWindow(window);
-      window.startTime = current_time;
-      window.highestEdep = current_edep;
-    }
 
-    if (fTimeWindowPolicy == TimeWindowPolicy::Paralyzable) {
-      // In Paralyzable mode, extend the time window to start at the time of
-      // the current digi.
+    if (window.digis->GetSize() == 0) {
       window.startTime = current_time;
-    } else if (fTimeWindowPolicy == TimeWindowPolicy::EnergyWinnerParalyzable) {
-      // In EnergyWinnerParalyzable mode, extend the time window only if
-      // the current digi has higher energy than the highest-energy
-      // digi so far.
-      if (current_edep > window.highestEdep) {
+      fWindowExpiry.push({window.hash, window.startTime + fTimeWindow});
+      window.highestEdep = current_edep;
+    } else {
+      switch (fTimeWindowPolicy) {
+      case TimeWindowPolicy::NonParalyzable:
+        break;
+      case TimeWindowPolicy::Paralyzable:
         window.startTime = current_time;
-        window.highestEdep = current_edep;
+        fWindowExpiry.push({window.hash, window.startTime + fTimeWindow});
+        break;
+      case TimeWindowPolicy::EnergyWinnerParalyzable:
+        if (current_edep > window.highestEdep) {
+          window.startTime = current_time;
+          fWindowExpiry.push({window.hash, window.startTime + fTimeWindow});
+          window.highestEdep = current_edep;
+        }
+        break;
+      default:
+        Fatal("Unknown time window policy");
       }
     }
 
     // Add the current digi to the window.
     window.fillerIn->Fill(iter.fIndex);
-
+    ProcessPileupWindows(current_time);
     iter++;
   }
   fTimeSorter->MarkOutputAsProcessed();
@@ -290,4 +285,13 @@ void GateDigitizerPileupActor::ProcessPileupWindow(PileupWindow &window) {
   window.digis->Clear();
 }
 
-void GateDigitizerPileupActor::ProcessPileupWindows(double currentTime) {}
+void GateDigitizerPileupActor::ProcessPileupWindows(double currentTime) {
+  while (fWindowExpiry.size() > 0 &&
+         currentTime > fWindowExpiry.front().expiryTime) {
+    auto &window = fVolumePileupWindows[fWindowExpiry.front().volumeHash];
+    if (currentTime > window.startTime + fTimeWindow) {
+      ProcessPileupWindow(window);
+    }
+    fWindowExpiry.pop();
+  }
+}

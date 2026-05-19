@@ -134,6 +134,7 @@ GateDigitizerPileupActor::GetPileupWindowForCurrentVolume(
   } else {
     // A PileupWindow object does not yet exist for this volume: create one.
     PileupWindow window;
+    window.hash = vol_hash;
     const auto vol_id = volume->get()->GetIdUpToDepth(fGroupVolumeDepth);
     // Create a GateDigiCollection for this volume, as a temporary storage for
     // digis that belong to the same time window (the name must be unique).
@@ -184,7 +185,9 @@ void GateDigitizerPileupActor::ProcessTimeSortedDigis() {
       // current digi and remember the current edep as highest.
       window.startTime = current_time;
       window.highestEdep = current_edep;
+      fWindowExpiry.push({window.hash, window.startTime + fTimeWindow});
     } else if (current_time - window.startTime > fTimeWindow) {
+      // TODO change description
       // The current digi is beyond the time window: process the digis that are
       // currently in the window, then make the window start at the time of the
       // current digi and remember the current edep as highest.
@@ -286,3 +289,5 @@ void GateDigitizerPileupActor::ProcessPileupWindow(PileupWindow &window) {
   // Remove all processed digis from the window.
   window.digis->Clear();
 }
+
+void GateDigitizerPileupActor::ProcessPileupWindows(double currentTime) {}

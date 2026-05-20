@@ -82,6 +82,7 @@ void GateDigitizerPileupActor::BeginOfRunActionMasterThread(int run_id) {
   outputIter.TrackAttribute("PreStepUniqueVolumeID", &fTimeSorterOutputVolID);
 
   fVolumePileupWindows.clear();
+  fWindowExpiry = std::queue<volumeWindowExpiry>();
 }
 
 void GateDigitizerPileupActor::SetGroupVolumeDepth(const int depth) {
@@ -181,6 +182,8 @@ void GateDigitizerPileupActor::ProcessTimeSortedDigis() {
     const auto current_time = *fTimeSorterOutputTime;
     const auto current_edep = *fTimeSorterOutputEdep;
 
+    ProcessPileupWindows(current_time);
+
     if (window.digis->GetSize() == 0) {
       window.startTime = current_time;
       fWindowExpiry.push({window.hash, window.startTime + fTimeWindow});
@@ -207,7 +210,6 @@ void GateDigitizerPileupActor::ProcessTimeSortedDigis() {
 
     // Add the current digi to the window.
     window.fillerIn->Fill(iter.fIndex);
-    ProcessPileupWindows(current_time);
     iter++;
   }
   fTimeSorter->MarkOutputAsProcessed();
@@ -223,6 +225,10 @@ void GateDigitizerPileupActor::ProcessPileupWindow(PileupWindow &window) {
   size_t last_index = 0;
   G4ThreeVector weighted_position;
   G4ThreeVector highest_edep_position;
+
+  if (window.digis->GetSize() == 0) {
+    return;
+  }
 
   // Iterate over all digis in the window from the beginning.
   auto &iter = window.digiIter;
@@ -288,7 +294,8 @@ void GateDigitizerPileupActor::ProcessPileupWindow(PileupWindow &window) {
 void GateDigitizerPileupActor::ProcessPileupWindows(double currentTime) {
   while (fWindowExpiry.size() > 0 &&
          currentTime > fWindowExpiry.front().expiryTime) {
-    auto &window = fVolumePileupWindows[fWindowExpiry.front().volumeHash];
+    auto it = fVolumePileupWindows.find(fWindowExpiry.front().volumeHash);
+    auto &window = fVolumePileupWindows.at(fWindowExpiry.front().volumeHash);
     if (currentTime > window.startTime + fTimeWindow) {
       ProcessPileupWindow(window);
     }

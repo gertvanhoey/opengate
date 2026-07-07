@@ -109,6 +109,29 @@ private:
   // Most-upstream detection
   std::atomic<bool> fIsFirstUpstream{false};
   static std::atomic<GateTimeSorter *> sMostUpstreamInstance;
+
+  // Thread convergence barrier (active on the most-upstream instance only,
+  // in multi-threaded simulations).
+  // When fSortedCollectionA first reaches kBarrierActivationThreshold digis,
+  // the GlobalTime divergence between the fastest and slowest thread is
+  // recorded. From that point on, threads whose GlobalTime has reached the
+  // current barrier target spin-wait until all other threads have caught up.
+  // The target then advances by the recorded divergence, repeating the barrier.
+  static constexpr size_t kBarrierActivationThreshold = 50'000;
+  std::atomic<bool> fBarrierSetupClaimed{
+      false};                              // won by the thread that does setup
+  std::atomic<bool> fBarrierActive{false}; // true once setup is complete
+  std::atomic<bool> fBarrierBypassed{
+      false}; // set in OnEndOfRunAction to unblock spinners
+  double fRecordedDivergence{
+      0.0}; // written once before fBarrierActive becomes true
+  std::atomic<double> fBarrierTarget{0.0}; // current barrier GlobalTime target
+  std::atomic<int> fThreadsAtBarrier{
+      0}; // threads currently waiting at the barrier
+  std::atomic<int> fBarrierGeneration{
+      0}; // incremented each time the barrier is released
+  std::atomic<size_t> fSortedCollectionASize{
+      0}; // updated in Process(); avoids racy GetSize() reads
 };
 
 #endif // GateTimeSorter_h

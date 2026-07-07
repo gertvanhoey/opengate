@@ -166,6 +166,76 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
     return;
   }
 
+  // Thread convergence barrier: prevents fast threads from outrunning slow ones
+  // by more than the divergence that was observed when fSortedCollectionA first
+  // exceeded kBarrierActivationThreshold. Only active on the most-upstream
+  // GateTimeSorter in multi-threaded simulations.
+  if (fNumWorkingThreads > 1 && IsFirstUpstream()) {
+    const int tid = std::max(0, G4Threading::G4GetThreadId());
+
+    // First time the sorted collection exceeds the threshold: one thread wins
+    // the CAS and records the inter-thread GlobalTime divergence, then
+    // activates the barrier. Other threads skip the CAS and rely on
+    // fBarrierActive.
+    if (!fBarrierSetupClaimed.load(std::memory_order_relaxed) &&
+        fSortedCollectionASize.load(std::memory_order_relaxed) >=
+            kBarrierActivationThreshold) {
+      bool expected = false;
+      if (fBarrierSetupClaimed.compare_exchange_strong(
+              expected, true, std::memory_order_acq_rel,
+              std::memory_order_relaxed)) {
+        auto [minIt, maxIt] = std::minmax_element(
+            fMaxGlobalTimePerThread.get(),
+            fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
+            [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
+              return a.value.load() < b.value.load();
+            });
+        const double maxTime = maxIt->value.load();
+        fRecordedDivergence = maxTime - minIt->value.load();
+        if (fRecordedDivergence > 0.0) {
+          // Store target before the release on fBarrierActive so that threads
+          // that acquire fBarrierActive == true are guaranteed to see it.
+          fBarrierTarget.store(maxTime, std::memory_order_relaxed);
+          fBarrierActive.store(true, std::memory_order_release);
+        }
+      }
+    }
+
+    // If the barrier is active and this thread's GlobalTime has reached the
+    // current target, spin-wait until every other thread has also reached it.
+    if (fBarrierActive.load(std::memory_order_acquire)) {
+      const double myTime =
+          fMaxGlobalTimePerThread[tid].value.load(std::memory_order_relaxed);
+      const double target = fBarrierTarget.load(std::memory_order_acquire);
+
+      if (myTime >= target) {
+        const int generation =
+            fBarrierGeneration.load(std::memory_order_acquire);
+        const int arrived =
+            fThreadsAtBarrier.fetch_add(1, std::memory_order_acq_rel) + 1;
+
+        if (arrived >= fNumWorkingThreads) {
+          // Last thread to arrive: advance target and release all waiters.
+          // Stores are ordered so that threads exiting the spin see the new
+          // target: reset counter, then bump generation (release fence covers
+          // both prior stores).
+          fBarrierTarget.store(target + fRecordedDivergence,
+                               std::memory_order_relaxed);
+          fThreadsAtBarrier.store(0, std::memory_order_relaxed);
+          fBarrierGeneration.fetch_add(1, std::memory_order_release);
+        } else {
+          // Spin until the generation advances (all threads arrived) or the
+          // run ends and the barrier is bypassed.
+          while (fBarrierGeneration.load(std::memory_order_acquire) ==
+                     generation &&
+                 !fBarrierBypassed.load(std::memory_order_relaxed)) {
+            // spin-wait
+          }
+        }
+      }
+    }
+  }
+
   // Phase 2
 
   // If the number of ingestions has not yet reached the threshold, then
@@ -206,6 +276,12 @@ void GateTimeSorter::OnEndOfRunAction(
   // anyThreadWork.
   // lastThreadWork allows the calling actor to execute logic that is intended
   // to run after the GateTimeSorter has finalized all digi sorting.
+
+  // Release any threads that are still spinning in the convergence barrier.
+  // This prevents a deadlock when some threads finish their event loop and
+  // call OnEndOfRunAction while others are still waiting at the barrier.
+  fBarrierBypassed.store(true, std::memory_order_release);
+
   if (fNumActiveWorkingThreads.fetch_sub(1, std::memory_order_acq_rel) <= 1) {
     Process();
     Flush();
@@ -414,6 +490,11 @@ void GateTimeSorter::Process() {
   if ((n >= n1 && n >= fSortedCollectionA->GetSize() / 2) || n >= n2) {
     Prune();
   }
+
+  // Keep the atomic size mirror up-to-date so the barrier check in
+  // OnEndOfEventAction() can read it without a data race.
+  fSortedCollectionASize.store(fSortedCollectionA->GetSize(),
+                               std::memory_order_relaxed);
 }
 
 void GateTimeSorter::Flush() {

@@ -26,6 +26,8 @@ public:
   void OnEndOfRunAction(std::function<void(void)> anyThreadWork,
                         std::function<void(void)> lastThreadWork);
 
+  bool IsFirstUpstream() const;
+
   GateDigiCollection *OutputCollection() const;
   GateDigiCollection::Iterator &OutputIterator();
   void MarkOutputAsProcessed();
@@ -103,6 +105,10 @@ private:
   double fMaxDropDelta{};
   std::optional<double> fMostRecentTimeArrived;
   std::optional<double> fMostRecentTimeDeparted;
+
+  // Most-upstream detection
+  std::atomic<bool> fIsFirstUpstream{false};
+  static std::atomic<GateTimeSorter *> sMostUpstreamInstance;
 };
 
 #endif // GateTimeSorter_h

@@ -35,7 +35,7 @@ private:
   void Process();
   void Flush();
 
-  void IdentifyFastestThread();
+  bool IsFirstUpstream() const;
   void MarkThreadAsFinished(int threadId);
   void Prune();
 
@@ -102,6 +102,10 @@ private:
   double fMaxDropDelta{};
   std::optional<double> fMostRecentTimeArrived;
   std::optional<double> fMostRecentTimeDeparted;
+
+  // Most-upstream detection
+  std::atomic<bool> fIsFirstUpstream{false};
+  static std::atomic<GateTimeSorter *> sMostUpstreamInstance;
 };
 
 #endif // GateTimeSorter_h

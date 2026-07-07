@@ -14,6 +14,8 @@
 #include <memory>
 #include <utility>
 
+std::atomic<GateTimeSorter *> GateTimeSorter::sMostUpstreamInstance{nullptr};
+
 GateTimeSorter::GateTimeSorter(const std::string &name) : fName(name) {
   fNumWorkingThreads =
       std::max(1, G4Threading::GetNumberOfRunningWorkerThreads());
@@ -143,6 +145,20 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
   // previous time sorting. This condition avoid incurring the overhead of stage
   // 2 after every ingestion of (typically very few) digis.
 
+  // Detect whether this instance is the most upstream GateTimeSorter in the
+  // simulation. The first instance on which OnEndOfEventAction() is called wins
+  // the CAS (compare-and-swap) on the shared static pointer and marks itself as
+  // the most upstream one. This detection is performed once and never changes
+  // thereafter.
+  if (!fIsFirstUpstream.load(std::memory_order_relaxed)) {
+    GateTimeSorter *expected = nullptr;
+    if (sMostUpstreamInstance.compare_exchange_strong(
+            expected, this, std::memory_order_acq_rel,
+            std::memory_order_relaxed)) {
+      fIsFirstUpstream.store(true, std::memory_order_release);
+    }
+  }
+
   // Phase 1
 
   if (!Ingest()) {
@@ -196,6 +212,13 @@ void GateTimeSorter::OnEndOfRunAction(
     lastThreadWork();
   }
   anyThreadWork();
+}
+
+bool GateTimeSorter::IsFirstUpstream() const {
+  // Returns true if this instance was the first GateTimeSorter to have its
+  // OnEndOfEventAction() called, making it the most upstream instance in the
+  // simulation's digitizer chain.
+  return fIsFirstUpstream.load(std::memory_order_acquire);
 }
 
 GateDigiCollection *GateTimeSorter::OutputCollection() const {

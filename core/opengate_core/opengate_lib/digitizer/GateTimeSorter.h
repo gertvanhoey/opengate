@@ -132,7 +132,7 @@ private:
       0}; // threads currently waiting at the barrier
   std::atomic<int> fBarrierGeneration{
       0}; // incremented each time the barrier is released
-  std::atomic<size_t> fSortedCollectionASize{
+  std::atomic<size_t> fSortedIndicesSize{
       0}; // updated in Process(); avoids racy GetSize() reads
   std::mutex fBarrierCVMutex;
   std::condition_variable fBarrierCV;

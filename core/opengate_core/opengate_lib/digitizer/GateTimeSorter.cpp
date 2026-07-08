@@ -178,7 +178,7 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
     // activates the barrier. Other threads skip the CAS and rely on
     // fBarrierActive.
     if (!fBarrierSetupClaimed.load(std::memory_order_relaxed) &&
-        fSortedCollectionASize.load(std::memory_order_relaxed) >=
+        fSortedIndicesSize.load(std::memory_order_relaxed) >=
             kBarrierActivationThreshold) {
       bool expected = false;
       if (fBarrierSetupClaimed.compare_exchange_strong(
@@ -192,10 +192,14 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
             });
         const double maxTime = maxIt->value.load();
         fRecordedDivergence = maxTime - minIt->value.load();
+        // TODO recorded divergence should be the max divergence that has
+        // happened so far, not the divergence at this particular instant.
+        std::cout << "fRecordedDivergence " << fRecordedDivergence << "\n";
         if (fRecordedDivergence > 0.0) {
           // Store target before the release on fBarrierActive so that threads
           // that acquire fBarrierActive == true are guaranteed to see it.
           fBarrierTarget.store(maxTime, std::memory_order_relaxed);
+          std::cout << "fBarrierTarget " << fBarrierTarget.load() << "\n";
           fBarrierActive.store(true, std::memory_order_release);
         }
       }
@@ -214,6 +218,9 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
         const int arrived =
             fThreadsAtBarrier.fetch_add(1, std::memory_order_acq_rel) + 1;
 
+        std::cout << "Thread " << tid << " halts at barrier with time "
+                  << myTime << " in " << fName << "\n";
+
         if (arrived >= fNumWorkingThreads) {
           // Last thread to arrive: advance target and release all waiters.
           // Stores are ordered so that threads exiting the spin see the new
@@ -224,6 +231,8 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
           fThreadsAtBarrier.store(0, std::memory_order_relaxed);
           fBarrierGeneration.fetch_add(1, std::memory_order_release);
           fBarrierCV.notify_all();
+          std::cout << "Barrier lifted in " << fName << "\n";
+          std::cout << "fBarrierTarget " << fBarrierTarget.load() << "\n";
         } else {
           // Park the thread until the barrier is released or the run ends.
           std::unique_lock<std::mutex> cvLock(fBarrierCVMutex);
@@ -495,8 +504,7 @@ void GateTimeSorter::Process() {
 
   // Keep the atomic size mirror up-to-date so the barrier check in
   // OnEndOfEventAction() can read it without a data race.
-  fSortedCollectionASize.store(fSortedCollectionA->GetSize(),
-                               std::memory_order_relaxed);
+  fSortedIndicesSize.store(fSortedIndicesA->size(), std::memory_order_relaxed);
 }
 
 void GateTimeSorter::Flush() {
@@ -532,6 +540,8 @@ void GateTimeSorter::Prune() {
   // 2. Sorted collection A is cleared.
   // 3. The two collections and sorted index queues are swapped.
 
+  const auto numBefore = fSortedCollectionA->GetSize();
+
   // Step 1
   GateDigiAttributesFiller transferFiller(
       fSortedCollectionA, fSortedCollectionB,
@@ -555,4 +565,7 @@ void GateTimeSorter::Prune() {
   // Step 3
   std::swap(fSortedCollectionA, fSortedCollectionB);
   std::swap(fSortedIndicesA, fSortedIndicesB);
+
+  std::cout << "Prune " << fName << " " << numBefore << " "
+            << fSortedCollectionA->GetSize() << "\n";
 }

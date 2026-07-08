@@ -4,9 +4,11 @@
 #include "GateDigiCollectionIterator.h"
 #include <G4Threading.hh>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
 
@@ -132,6 +134,8 @@ private:
       0}; // incremented each time the barrier is released
   std::atomic<size_t> fSortedCollectionASize{
       0}; // updated in Process(); avoids racy GetSize() reads
+  std::mutex fBarrierCVMutex;
+  std::condition_variable fBarrierCV;
 };
 
 #endif // GateTimeSorter_h

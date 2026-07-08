@@ -223,14 +223,15 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
                                std::memory_order_relaxed);
           fThreadsAtBarrier.store(0, std::memory_order_relaxed);
           fBarrierGeneration.fetch_add(1, std::memory_order_release);
+          fBarrierCV.notify_all();
         } else {
-          // Spin until the generation advances (all threads arrived) or the
-          // run ends and the barrier is bypassed.
-          while (fBarrierGeneration.load(std::memory_order_acquire) ==
-                     generation &&
-                 !fBarrierBypassed.load(std::memory_order_relaxed)) {
-            // spin-wait
-          }
+          // Park the thread until the barrier is released or the run ends.
+          std::unique_lock<std::mutex> cvLock(fBarrierCVMutex);
+          fBarrierCV.wait(cvLock, [&] {
+            return fBarrierGeneration.load(std::memory_order_relaxed) !=
+                       generation ||
+                   fBarrierBypassed.load(std::memory_order_relaxed);
+          });
         }
       }
     }
@@ -277,10 +278,11 @@ void GateTimeSorter::OnEndOfRunAction(
   // lastThreadWork allows the calling actor to execute logic that is intended
   // to run after the GateTimeSorter has finalized all digi sorting.
 
-  // Release any threads that are still spinning in the convergence barrier.
+  // Unblock any threads parked in the convergence barrier.
   // This prevents a deadlock when some threads finish their event loop and
   // call OnEndOfRunAction while others are still waiting at the barrier.
   fBarrierBypassed.store(true, std::memory_order_release);
+  fBarrierCV.notify_all();
 
   if (fNumActiveWorkingThreads.fetch_sub(1, std::memory_order_acq_rel) <= 1) {
     Process();

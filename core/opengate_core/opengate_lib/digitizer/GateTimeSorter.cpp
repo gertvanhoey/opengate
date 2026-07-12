@@ -192,10 +192,9 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
   // (previous target + recorded interval).
 
   // Thread synchronization setup
-  if (fNumWorkingThreads > 1 && fThreadSyncEnabled) {
-    // First time the sorted collection exceeds the threshold: one thread wins
-    // the CAS (compare-and-swap) and records the GlobalTime interval that has
-    // elapsed since the start of the run, then activates the barrier.
+  if (fNumWorkingThreads > 1 && fThreadSyncEnabled && IsFirstUpstream()) {
+
+    // Thread synchronization setup
     if (!fBarrierSetupClaimed.load(std::memory_order_relaxed) &&
         fSortedIndicesSize.load(std::memory_order_relaxed) >=
             fBarrierActivationThreshold) {
@@ -337,7 +336,7 @@ void GateTimeSorter::OnEndOfRunAction(
   // Unblock any threads parked in the convergence barrier.
   // This prevents a deadlock when some threads finish their event loop and
   // call OnEndOfRunAction while others are still waiting at the barrier.
-  if (fNumWorkingThreads > 1 && fThreadSyncEnabled) {
+  if (fNumWorkingThreads > 1 && fThreadSyncEnabled && IsFirstUpstream()) {
     fBarrierBypassed.store(true, std::memory_order_release);
     fBarrierConditionVariable.notify_all();
   }
@@ -555,7 +554,7 @@ void GateTimeSorter::Process() {
 
   // Keep the atomic size mirror up-to-date so the barrier check in
   // OnEndOfEventAction() can read it without a data race.
-  if (fNumWorkingThreads > 1 && fThreadSyncEnabled) {
+  if (fNumWorkingThreads > 1 && fThreadSyncEnabled && IsFirstUpstream()) {
     fSortedIndicesSize.store(fSortedIndicesA->size(),
                              std::memory_order_relaxed);
   }

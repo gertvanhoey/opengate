@@ -4,9 +4,11 @@
 #include "GateDigiCollectionIterator.h"
 #include <G4Threading.hh>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
 
@@ -21,6 +23,8 @@ public:
 
   void SetSortingWindow(double duration);
   void SetMaxSize(size_t size);
+  void SetBufferThreadSyncThreshold(size_t size);
+  void SetThreadSyncEnabled(bool enabled);
 
   void OnEndOfEventAction(std::function<void(void)> work);
   void OnEndOfRunAction(std::function<void(void)> anyThreadWork,
@@ -100,12 +104,27 @@ private:
   size_t fNumDroppedDigi{};
   size_t fNumDigi{};
   double fMaxDropDelta{};
+  std::optional<double> fFirstGlobalTime;
   std::optional<double> fMostRecentTimeArrived;
   std::optional<double> fMostRecentTimeDeparted;
 
   // Most-upstream detection
   std::atomic<bool> fIsFirstUpstream{false};
   static std::atomic<GateTimeSorter *> sMostUpstreamInstance;
+
+  // Barrier for thread synchronization
+  size_t fBarrierActivationThreshold{50'000};
+  bool fThreadSyncEnabled{true};
+  std::atomic<bool> fBarrierSetupClaimed{false};
+  std::atomic<bool> fBarrierSetupComplete{false};
+  std::atomic<bool> fBarrierBypassed{false};
+  double fRecordedGlobalTimeInterval{0.0};
+  std::atomic<double> fBarrierGlobalTimeTarget{0.0};
+  std::atomic<int> fNumThreadsAtBarrier{0};
+  std::atomic<int> fBarrierGeneration{0};
+  std::atomic<size_t> fSortedIndicesSize{0};
+  std::mutex fBarrierConditionVariableMutex;
+  std::condition_variable fBarrierConditionVariable;
 };
 
 #endif // GateTimeSorter_h

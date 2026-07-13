@@ -131,6 +131,18 @@ void GateTimeSorter::SetMaxSize(size_t maxSize) {
   fMaxSize = maxSize;
 }
 
+void GateTimeSorter::SetBufferThreadSyncThreshold(size_t size) {
+  if (fProcessingStarted) {
+    Fatal("SetBufferThreadSyncThreshold() cannot be called after Ingest() has "
+          "been called.");
+  }
+  fBarrierActivationThreshold = size;
+}
+
+void GateTimeSorter::SetThreadSyncEnabled(bool enabled) {
+  fThreadSyncEnabled = enabled;
+}
+
 void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
   // This method is intended to be called by an actor in its EndOfEventAction()
   // method. The work function provided by the actor may then be called for
@@ -164,6 +176,121 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
   if (!Ingest()) {
     // Return early if no digis were ingested.
     return;
+  }
+
+  // A thread synchronization barrier avoids GlobalTime divergence between
+  // threads which leads to increased memory consumption in the time sorter.
+
+  // Thread convergence barrier (active on the most-upstream instance only,
+  // in multi-threaded simulations).
+  // When fSortedCollectionA first reaches fBarrierActivationThreshold digis,
+  // the GlobalTime interval elapsed on the fastest thread is recorded to be
+  // used as GlobalTime interval.
+  // Threads that have reached at least the same GlobalTime as the fastest
+  // thread, wait until all threads have reached at least that GlobalTime. After
+  // that, all thread continue until they reach the next GlobalTime target
+  // (previous target + recorded interval).
+
+  // Thread synchronization setup
+  if (fNumWorkingThreads > 1 && fThreadSyncEnabled) {
+    // First time the sorted collection exceeds the threshold: one thread wins
+    // the CAS (compare-and-swap) and records the GlobalTime interval that has
+    // elapsed since the start of the run, then activates the barrier.
+    if (!fBarrierSetupClaimed.load(std::memory_order_relaxed) &&
+        fSortedIndicesSize.load(std::memory_order_relaxed) >=
+            fBarrierActivationThreshold) {
+      bool expected = false;
+      if (fBarrierSetupClaimed.compare_exchange_strong(
+              expected, true, std::memory_order_acq_rel,
+              std::memory_order_relaxed)) {
+        auto maxIt = std::max_element(
+            fMaxGlobalTimePerThread.get(),
+            fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
+            [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
+              return a.value.load() < b.value.load();
+            });
+        const double maxTime = maxIt->value.load();
+        fRecordedGlobalTimeInterval = maxTime - *fFirstGlobalTime;
+        std::cout << "fRecordedGlobalTimeInterval "
+                  << fRecordedGlobalTimeInterval << "\n";
+        if (fRecordedGlobalTimeInterval > 0.0) {
+          // Store target before the release on fBarrierSetupComplete so that
+          // threads that acquire fBarrierSetupComplete == true are guaranteed
+          // to see it.
+          fBarrierGlobalTimeTarget.store(maxTime, std::memory_order_relaxed);
+          std::cout << "fBarrierGlobalTimeTarget "
+                    << fBarrierGlobalTimeTarget.load() << "\n";
+          fBarrierSetupComplete.store(true, std::memory_order_release);
+        }
+      }
+    }
+
+    // If the barrier has been set up and this thread's GlobalTime has reached
+    // the current target, then wait until every other thread has also reached
+    // it.
+    if (fBarrierSetupComplete.load(std::memory_order_acquire)) {
+      const int tid = std::max(0, G4Threading::G4GetThreadId());
+      const double threadTime =
+          fMaxGlobalTimePerThread[tid].value.load(std::memory_order_relaxed);
+      const double targetTime =
+          fBarrierGlobalTimeTarget.load(std::memory_order_acquire);
+
+      if (threadTime >= targetTime) {
+        const int generation =
+            fBarrierGeneration.load(std::memory_order_acquire);
+        const int arrived =
+            fNumThreadsAtBarrier.fetch_add(1, std::memory_order_acq_rel) + 1;
+
+        // TODO remove this logging
+        if (arrived == 1) {
+          auto [minIt, maxIt] = std::minmax_element(
+              fMaxGlobalTimePerThread.get(),
+              fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
+              [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
+                return a.value.load() < b.value.load();
+              });
+          std::cout << "[" << fName << "] Barrier hit with divergence "
+                    << (maxIt->value.load() - minIt->value.load()) << "\n";
+        }
+        // TODO remove until here
+
+        if (arrived >= fNumWorkingThreads) {
+          // Last thread to arrive: advance target and release all waiters.
+          // Stores are ordered so that threads resuming see the new
+          // target: reset counter, then bump generation.
+          fBarrierGlobalTimeTarget.store(targetTime +
+                                             fRecordedGlobalTimeInterval,
+                                         std::memory_order_relaxed);
+          fNumThreadsAtBarrier.store(0, std::memory_order_relaxed);
+          fBarrierGeneration.fetch_add(1, std::memory_order_release);
+          fBarrierConditionVariable.notify_all();
+
+          // TODO remove this logging
+          {
+            auto [minIt, maxIt] = std::minmax_element(
+                fMaxGlobalTimePerThread.get(),
+                fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
+                [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
+                  return a.value.load() < b.value.load();
+                });
+            std::cout << "[" << fName << "] Barrier lifted with divergence "
+                      << (maxIt->value.load() - minIt->value.load()) << "\n";
+          }
+          std::cout << "fBarrierGlobalTimeTarget "
+                    << fBarrierGlobalTimeTarget.load() << "\n";
+          // TODO remove until here
+
+        } else {
+          // Park the thread until the barrier is released or the run ends.
+          std::unique_lock<std::mutex> cvLock(fBarrierConditionVariableMutex);
+          fBarrierConditionVariable.wait(cvLock, [&] {
+            return fBarrierGeneration.load(std::memory_order_relaxed) !=
+                       generation ||
+                   fBarrierBypassed.load(std::memory_order_relaxed);
+          });
+        }
+      }
+    }
   }
 
   // Phase 2
@@ -206,6 +333,14 @@ void GateTimeSorter::OnEndOfRunAction(
   // anyThreadWork.
   // lastThreadWork allows the calling actor to execute logic that is intended
   // to run after the GateTimeSorter has finalized all digi sorting.
+
+  // Unblock any threads parked in the convergence barrier.
+  // This prevents a deadlock when some threads finish their event loop and
+  // call OnEndOfRunAction while others are still waiting at the barrier.
+  if (fNumWorkingThreads > 1 && fThreadSyncEnabled) {
+    fBarrierBypassed.store(true, std::memory_order_release);
+    fBarrierConditionVariable.notify_all();
+  }
   if (fNumActiveWorkingThreads.fetch_sub(1, std::memory_order_acq_rel) <= 1) {
     Process();
     Flush();
@@ -276,6 +411,9 @@ bool GateTimeSorter::Ingest() {
   const int tid = std::max(0, G4Threading::G4GetThreadId());
   const double currentMax = fMaxGlobalTimePerThread[tid].value.load();
   double newMax = currentMax;
+  if (!fFirstGlobalTime.has_value()) {
+    fFirstGlobalTime = *t;
+  }
   while (!iter.IsAtEnd()) {
     filler->Fill(iter.fIndex);
     newMax = std::max(newMax, *t);
@@ -414,6 +552,13 @@ void GateTimeSorter::Process() {
   if ((n >= n1 && n >= fSortedCollectionA->GetSize() / 2) || n >= n2) {
     Prune();
   }
+
+  // Keep the atomic size mirror up-to-date so the barrier check in
+  // OnEndOfEventAction() can read it without a data race.
+  if (fNumWorkingThreads > 1 && fThreadSyncEnabled) {
+    fSortedIndicesSize.store(fSortedIndicesA->size(),
+                             std::memory_order_relaxed);
+  }
 }
 
 void GateTimeSorter::Flush() {
@@ -449,6 +594,8 @@ void GateTimeSorter::Prune() {
   // 2. Sorted collection A is cleared.
   // 3. The two collections and sorted index queues are swapped.
 
+  const auto numBefore = fSortedCollectionA->GetSize();
+
   // Step 1
   GateDigiAttributesFiller transferFiller(
       fSortedCollectionA, fSortedCollectionB,
@@ -472,4 +619,7 @@ void GateTimeSorter::Prune() {
   // Step 3
   std::swap(fSortedCollectionA, fSortedCollectionB);
   std::swap(fSortedIndicesA, fSortedIndicesB);
+
+  std::cout << "Prune " << fName << " " << numBefore << " "
+            << fSortedCollectionA->GetSize() << "\n";
 }

@@ -118,7 +118,7 @@ private:
   std::atomic<bool> fBarrierSetupClaimed{false};
   std::atomic<bool> fBarrierSetupComplete{false};
   std::atomic<bool> fBarrierBypassed{false};
-  double fRecordedGlobalTimeInterval{0.0};
+  // double fRecordedGlobalTimeInterval{0.0};
   std::atomic<double> fBarrierGlobalTimeTarget{0.0};
   std::atomic<int> fNumThreadsAtBarrier{0};
   std::atomic<int> fBarrierGeneration{0};

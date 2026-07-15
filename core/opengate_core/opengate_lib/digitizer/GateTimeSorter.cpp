@@ -11,6 +11,7 @@
 #include "GateDigiCollectionManager.h"
 #include "GateHelpersDigitizer.h"
 #include <G4Threading.hh>
+#include <atomic>
 #include <memory>
 #include <utility>
 
@@ -208,19 +209,14 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
             [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
               return a.value.load() < b.value.load();
             });
+        // Store target before the release on fBarrierSetupComplete so that
+        // threads that acquire fBarrierSetupComplete == true are guaranteed
+        // to see it.
         const double maxTime = maxIt->value.load();
-        fRecordedGlobalTimeInterval = maxTime - *fFirstGlobalTime;
-        std::cout << "fRecordedGlobalTimeInterval "
-                  << fRecordedGlobalTimeInterval << "\n";
-        if (fRecordedGlobalTimeInterval > 0.0) {
-          // Store target before the release on fBarrierSetupComplete so that
-          // threads that acquire fBarrierSetupComplete == true are guaranteed
-          // to see it.
-          fBarrierGlobalTimeTarget.store(maxTime, std::memory_order_relaxed);
-          std::cout << "fBarrierGlobalTimeTarget "
-                    << fBarrierGlobalTimeTarget.load() << "\n";
-          fBarrierSetupComplete.store(true, std::memory_order_release);
-        }
+        fBarrierGlobalTimeTarget.store(maxTime, std::memory_order_relaxed);
+        std::cout << "fBarrierGlobalTimeTarget "
+                  << fBarrierGlobalTimeTarget.load() << "\n";
+        fBarrierSetupComplete.store(true, std::memory_order_release);
       }
     }
 
@@ -235,59 +231,82 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
           fBarrierGlobalTimeTarget.load(std::memory_order_acquire);
 
       if (threadTime >= targetTime) {
-        const int generation =
-            fBarrierGeneration.load(std::memory_order_acquire);
-        const int arrived =
-            fNumThreadsAtBarrier.fetch_add(1, std::memory_order_acq_rel) + 1;
+        std::unique_lock<std::mutex> cvLock(fBarrierConditionVariableMutex);
 
-        // TODO remove this logging
-        if (arrived == 1) {
-          auto [minIt, maxIt] = std::minmax_element(
-              fMaxGlobalTimePerThread.get(),
-              fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
-              [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
-                return a.value.load() < b.value.load();
-              });
-          std::cout << "[" << fName << "] Barrier hit with divergence "
-                    << (maxIt->value.load() - minIt->value.load()) << "\n";
-        }
-        // TODO remove until here
-
-        if (arrived >= fNumWorkingThreads) {
-          // Last thread to arrive: advance target and release all waiters.
-          // Stores are ordered so that threads resuming see the new
-          // target: reset counter, then bump generation.
-          fBarrierGlobalTimeTarget.store(targetTime +
-                                             fRecordedGlobalTimeInterval,
-                                         std::memory_order_relaxed);
-          fNumThreadsAtBarrier.store(0, std::memory_order_relaxed);
-          fBarrierGeneration.fetch_add(1, std::memory_order_release);
-          fBarrierConditionVariable.notify_all();
+        // Re-check under lock: the barrier may have been released while we
+        // were between the outer fBarrierSetupComplete check and here,
+        // which would otherwise cause a stale increment (ABA problem on
+        // fNumThreadsAtBarrier).
+        if (fBarrierSetupComplete.load(std::memory_order_relaxed)) {
+          // All loads/stores below use relaxed; the mutex provides the
+          // necessary ordering.
+          const int generation =
+              fBarrierGeneration.load(std::memory_order_relaxed);
+          const int arrived =
+              fNumThreadsAtBarrier.fetch_add(1, std::memory_order_relaxed) + 1;
 
           // TODO remove this logging
-          {
+          if (arrived == 1) {
             auto [minIt, maxIt] = std::minmax_element(
                 fMaxGlobalTimePerThread.get(),
                 fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
                 [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
                   return a.value.load() < b.value.load();
                 });
-            std::cout << "[" << fName << "] Barrier lifted with divergence "
+            std::cout << "[" << fName << "] Barrier hit with divergence "
                       << (maxIt->value.load() - minIt->value.load()) << "\n";
           }
-          std::cout << "fBarrierGlobalTimeTarget "
-                    << fBarrierGlobalTimeTarget.load() << "\n";
           // TODO remove until here
 
-        } else {
-          // Park the thread until the barrier is released or the run ends.
-          std::unique_lock<std::mutex> cvLock(fBarrierConditionVariableMutex);
-          fBarrierConditionVariable.wait(cvLock, [&] {
-            return fBarrierGeneration.load(std::memory_order_relaxed) !=
-                       generation ||
-                   fBarrierBypassed.load(std::memory_order_relaxed);
-          });
+          if (arrived >= fNumWorkingThreads) {
+            // Last thread to arrive: reset state and release all waiters.
+            fNumThreadsAtBarrier.store(0, std::memory_order_relaxed);
+            fBarrierSetupComplete.store(false, std::memory_order_relaxed);
+            fBarrierSetupClaimed.store(false, std::memory_order_relaxed);
+
+            // Reset sorting window before unlocking so woken threads see the
+            // updated value when they next call Process().
+            auto [minIt, maxIt] = std::minmax_element(
+                fMaxGlobalTimePerThread.get(),
+                fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
+                [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
+                  return a.value.load() < b.value.load();
+                });
+            fSortingWindow.store(fMinimumSortingWindow + maxIt->value.load() -
+                                 minIt->value.load());
+
+            fBarrierGeneration.fetch_add(1, std::memory_order_relaxed);
+
+            // TODO remove this logging
+            {
+              auto [minIt, maxIt] = std::minmax_element(
+                  fMaxGlobalTimePerThread.get(),
+                  fMaxGlobalTimePerThread.get() + fNumWorkingThreads,
+                  [](const PaddedAtomicDouble &a, const PaddedAtomicDouble &b) {
+                    return a.value.load() < b.value.load();
+                  });
+              std::cout << "[" << fName << "] Barrier lifted with divergence "
+                        << (maxIt->value.load() - minIt->value.load()) << "\n";
+            }
+            std::cout << "fBarrierGlobalTimeTarget "
+                      << fBarrierGlobalTimeTarget.load() << "\n";
+            // TODO remove until here
+
+            cvLock.unlock();
+            fBarrierConditionVariable.notify_all();
+          } else {
+            // Park the thread until the barrier is released or the run ends.
+            // cvLock is already held; wait() releases it while parked.
+            fBarrierConditionVariable.wait(cvLock, [&] {
+              return fBarrierGeneration.load(std::memory_order_relaxed) !=
+                         generation ||
+                     fBarrierBypassed.load(std::memory_order_relaxed);
+            });
+          }
         }
+        // If fBarrierSetupComplete was false under the lock, this thread
+        // arrived after the barrier was already released; cvLock releases
+        // via RAII without any counter increment.
       }
     }
   }

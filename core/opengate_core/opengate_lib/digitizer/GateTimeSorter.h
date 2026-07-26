@@ -32,6 +32,9 @@ public:
 
 private:
   bool Ingest();
+  bool ThreadSyncRequired();
+  void SetupBarrierIfNeeded();
+  void WaitAtBarrierIfNeeded();
   void Process();
   void Flush();
 
@@ -102,6 +105,31 @@ private:
   double fMaxDropDelta{};
   std::optional<double> fMostRecentTimeArrived;
   std::optional<double> fMostRecentTimeDeparted;
+
+  // Most-upstream detection
+  std::atomic<bool> fIsFirstUpstream{false};
+  static std::atomic<GateTimeSorter *> sMostUpstreamInstance;
+
+  struct ThreadSync {
+    // Barrier for thread synchronization
+    bool enabled{true};
+    size_t activationThreshold{50'000};
+
+    std::atomic<bool> barrierSetupAllowed{true};
+    std::atomic<bool> barrierSetupClaimed{false};
+    std::atomic<bool> barrierSetupComplete{false};
+    std::atomic<bool> barrierBypassed{false};
+    // double fRecordedGlobalTimeInterval{0.0};
+    std::atomic<double> barrierGlobalTimeTarget{0.0};
+    std::atomic<int> numThreadsAtBarrier{0};
+    std::atomic<int> barrierGeneration{0};
+
+    std::atomic<size_t> sortedIndicesSize{0};
+    std::mutex barrierConditionVariableMutex;
+    std::condition_variable barrierConditionVariable;
+  };
+
+  ThreadSync fThreadSync;
 };
 
 #endif // GateTimeSorter_h

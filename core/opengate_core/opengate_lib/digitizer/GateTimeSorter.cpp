@@ -24,6 +24,16 @@ GateTimeSorter::GateTimeSorter(const std::string &name) : fName(name) {
       std::make_unique<PaddedAtomicDouble[]>(fNumWorkingThreads);
 }
 
+GateTimeSorter::~GateTimeSorter() {
+  // Reset the static so that subsequent simulation runs can elect a new
+  // upstream instance. Without this, sMostUpstreamInstance would keep pointing
+  // to a destroyed object and the CAS in IsFirstUpstream() would never succeed
+  // again (expected == nullptr would always fail).
+  GateTimeSorter *expected = this;
+  sMostUpstreamInstance.compare_exchange_strong(
+      expected, nullptr, std::memory_order_acq_rel, std::memory_order_relaxed);
+}
+
 void GateTimeSorter::Init(GateDigiCollection *input) {
 
   fInputCollection = input;
@@ -307,19 +317,15 @@ bool GateTimeSorter::Ingest() {
 }
 
 bool GateTimeSorter::IsFirstUpstream() {
-  if (fIsFirstUpstream.load(std::memory_order_relaxed)) {
-    return true;
-  } else {
+  if (!fIsFirstUpstream.load(std::memory_order_relaxed)) {
     GateTimeSorter *expected = nullptr;
     if (sMostUpstreamInstance.compare_exchange_strong(
             expected, this, std::memory_order_acq_rel,
             std::memory_order_relaxed)) {
       fIsFirstUpstream.store(true, std::memory_order_release);
-      return true;
-    } else {
-      return false;
     }
   }
+  return fIsFirstUpstream.load();
 }
 
 bool GateTimeSorter::ThreadSyncRequired() {

@@ -16,6 +16,7 @@ class GateDigiAttributesFiller;
 class GateTimeSorter {
 public:
   GateTimeSorter(const std::string &name);
+  ~GateTimeSorter();
 
   void Init(GateDigiCollection *input);
 

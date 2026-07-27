@@ -204,7 +204,7 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
                                                    std::memory_order_relaxed)) {
       Process(); // executes time-sorting logic
       if (ThreadSyncRequired()) {
-        fThreadSync.sortedIndicesSize.store(fSortedCollectionA->GetSize(),
+        fThreadSync.sortedIndicesSize.store(fSortedIndicesA->size(),
                                             std::memory_order_release);
         fThreadSync.barrierSetupAllowed.store(true, std::memory_order_release);
       }

@@ -159,7 +159,8 @@ void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
   // GlobalTime observed by a thread is related to the primary events simulated
   // by that same thread (digis may switch from one thread's input collection to
   // another thread's output collection while being processed in the time
-  // sorter).
+  // sorter). The first time sorter to ingest at least one digi will be marked
+  // as the most upstream time sorter.
 
   if (ThreadSyncRequired()) {
     SetupBarrierIfNeeded();
@@ -303,9 +304,24 @@ bool GateTimeSorter::Ingest() {
   return true;
 }
 
+bool GateTimeSorter::IsFirstUpstream() {
+  if (fIsFirstUpstream.load(std::memory_order_relaxed)) {
+    return true;
+  } else {
+    GateTimeSorter *expected = nullptr;
+    if (sMostUpstreamInstance.compare_exchange_strong(
+            expected, this, std::memory_order_acq_rel,
+            std::memory_order_relaxed)) {
+      fIsFirstUpstream.store(true, std::memory_order_release);
+      return true;
+    } else {
+      return false;
+    }
+  }
+}
+
 bool GateTimeSorter::ThreadSyncRequired() {
-  return fNumWorkingThreads > 1 && fThreadSync.enabled &&
-         fIsFirstUpstream.load(std::memory_order_acquire);
+  return fNumWorkingThreads > 1 && fThreadSync.enabled && IsFirstUpstream();
 }
 
 void GateTimeSorter::SetupBarrierIfNeeded() {

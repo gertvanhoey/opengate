@@ -32,6 +32,7 @@ public:
 
 private:
   bool Ingest();
+  bool IsFirstUpstream();
   bool ThreadSyncRequired();
   void SetupBarrierIfNeeded();
   void WaitAtBarrierIfNeeded();

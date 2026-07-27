@@ -14,6 +14,8 @@
 #include <memory>
 #include <utility>
 
+std::atomic<GateTimeSorter *> GateTimeSorter::sMostUpstreamInstance{nullptr};
+
 GateTimeSorter::GateTimeSorter(const std::string &name) : fName(name) {
   fNumWorkingThreads =
       std::max(1, G4Threading::GetNumberOfRunningWorkerThreads());
@@ -352,7 +354,8 @@ void GateTimeSorter::SetupBarrierIfNeeded() {
       const double maxTime = maxIt->value.load();
       ts.barrierGlobalTimeTarget.store(maxTime, std::memory_order_relaxed);
       std::cout << "barrierGlobalTimeTarget "
-                << ts.barrierGlobalTimeTarget.load() << "\n";
+                << ts.barrierGlobalTimeTarget.load() << " sortedIndicesSize "
+                << ts.sortedIndicesSize.load(std::memory_order_relaxed) << "\n";
       ts.barrierSetupComplete.store(true, std::memory_order_release);
     }
   }

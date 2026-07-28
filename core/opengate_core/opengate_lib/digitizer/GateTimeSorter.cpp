@@ -141,6 +141,18 @@ void GateTimeSorter::SetMaxSize(size_t maxSize) {
   fMaxSize = maxSize;
 }
 
+void GateTimeSorter::SetBufferThreadSyncThreshold(size_t size) {
+  if (fProcessingStarted) {
+    Fatal("SetBufferThreadSyncThreshold() cannot be called after Ingest() has "
+          "been called.");
+  }
+  fThreadSync.activationThreshold = size;
+}
+
+void GateTimeSorter::SetThreadSyncEnabled(bool enabled) {
+  fThreadSync.enabled = enabled;
+}
+
 void GateTimeSorter::OnEndOfEventAction(std::function<void(void)> work) {
   // This method is intended to be called by an actor in its EndOfEventAction()
   // method. The work function provided by the actor may then be called for

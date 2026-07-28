@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <queue>
 
@@ -22,6 +23,8 @@ public:
 
   void SetSortingWindow(double duration);
   void SetMaxSize(size_t size);
+  void SetBufferThreadSyncThreshold(size_t size);
+  void SetThreadSyncEnabled(bool enabled);
 
   void OnEndOfEventAction(std::function<void(void)> work);
   void OnEndOfRunAction(std::function<void(void)> anyThreadWork,
@@ -121,7 +124,6 @@ private:
     std::atomic<bool> barrierSetupClaimed{false};
     std::atomic<bool> barrierSetupComplete{false};
     std::atomic<bool> barrierBypassed{false};
-    // double fRecordedGlobalTimeInterval{0.0};
     std::atomic<double> barrierGlobalTimeTarget{0.0};
     std::atomic<int> numThreadsAtBarrier{0};
     std::atomic<int> barrierGeneration{0};
